@@ -1,10 +1,7 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
-name: Build and deploy Python app to Azure Web App - cpl-team2-app
+name: Build and deploy Python app to Azure Web App - team2
 
 concurrency:
-  group: cpl-team2-app
+  group: team2-app
   cancel-in-progress: true
 
 on:
@@ -23,12 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python version
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # Sanity check only (does not affect deployment runtime)
       - name: Install dependencies (sanity check)
         run: |
           python -m pip install --upgrade pip
@@ -42,7 +38,7 @@ jobs:
           path: |
             .
             !.git/
-            !.github/
+            !.gitignore
             !__pycache__/
             !**/__pycache__/
             !**/*.pyc
@@ -86,6 +82,6 @@ jobs:
         with:
           app-name: cpl-team2-app
           slot-name: Production
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISH_PROFILE }}
           package: python-app
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISH_PROFILE }}
           clean: true

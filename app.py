@@ -121,6 +121,88 @@ def dbcheck():
 
 
 # ===============================
+# 🛠️ DB SETUP ROUTE
+# Creates database tables if they don't exist
+# ===============================
+@app.get("/setup-db")
+def setup_db():
+    conn_str = os.getenv("SQL_CONNECTION_STRING")
+    if not conn_str:
+        return jsonify({"error": "Missing SQL_CONNECTION_STRING"}), 500
+
+    try:
+        conn = pyodbc.connect(conn_str, timeout=10)
+        cursor = conn.cursor()
+
+        # Create sessions table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='sessions' AND xtype='U')
+            CREATE TABLE sessions (
+                session_id NVARCHAR(50) PRIMARY KEY,
+                created_at DATETIME DEFAULT GETDATE(),
+                user_label NVARCHAR(100)
+            )
+        """)
+
+        # Create messages table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='messages' AND xtype='U')
+            CREATE TABLE messages (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                session_id NVARCHAR(50) NOT NULL,
+                role NVARCHAR(20) NOT NULL,
+                content NVARCHAR(MAX),
+                timestamp DATETIME DEFAULT GETDATE(),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+
+        # Create uploads table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='uploads' AND xtype='U')
+            CREATE TABLE uploads (
+                upload_id NVARCHAR(50) PRIMARY KEY,
+                session_id NVARCHAR(50) NOT NULL,
+                filename NVARCHAR(255),
+                blob_url NVARCHAR(500),
+                content_type NVARCHAR(100),
+                size INT,
+                uploaded_at DATETIME DEFAULT GETDATE(),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+
+        # Create summaries table
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='summaries' AND xtype='U')
+            CREATE TABLE summaries (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                session_id NVARCHAR(50) NOT NULL,
+                summary_text NVARCHAR(MAX),
+                created_at DATETIME DEFAULT GETDATE(),
+                model_version NVARCHAR(50),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": "Database tables created successfully",
+            "tables": ["sessions", "messages", "uploads", "summaries"]
+        })
+
+    except Exception as e:
+        app.logger.exception("Database setup failed")
+        return jsonify({
+            "error": f"Database setup failed: {type(e).__name__}",
+            "details": str(e),
+        }), 500
+
+
+# ===============================
 # Chat API Endpoint
 # ===============================
 @app.post("/api/chat")
@@ -143,7 +225,7 @@ def api_chat():
         response = client.chat.completions.create(
             model=deployment,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for the CPL course."},
+                {"role": "system", "content": "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview students about their professional experience and help them articulate their skills for academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help them identify relevant evidence of their learning. Start by asking what course or competency area they want to receive credit for."},
                 {"role": "user", "content": user_message},
             ],
             temperature=0.3,

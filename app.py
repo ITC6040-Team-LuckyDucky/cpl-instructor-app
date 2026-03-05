@@ -59,12 +59,12 @@ def chat_page():
 @app.get("/admin")
 def admin_page():
     status = {
-        "AZURE_OPENAI_ENDPOINT": "✅ set" if os.getenv("AZURE_OPENAI_ENDPOINT") else "❌ missing",
-        "AZURE_OPENAI_API_KEY": "✅ set" if os.getenv("AZURE_OPENAI_API_KEY") else "❌ missing",
+        "AZURE_OPENAI_ENDPOINT": " set" if os.getenv("AZURE_OPENAI_ENDPOINT") else "missing",
+        "AZURE_OPENAI_API_KEY": " set" if os.getenv("AZURE_OPENAI_API_KEY") else "missing",
         "AZURE_OPENAI_API_VERSION": os.getenv("AZURE_OPENAI_API_VERSION") or "(default: 2024-12-01-preview)",
-        "AZURE_OPENAI_DEPLOYMENT": "✅ set" if os.getenv("AZURE_OPENAI_DEPLOYMENT") else "❌ missing",
+        "AZURE_OPENAI_DEPLOYMENT": " set" if os.getenv("AZURE_OPENAI_DEPLOYMENT") else "missing",
         # NEW: show whether SQL conn string is present (but never show its value)
-        "SQL_CONNECTION_STRING": "✅ set" if os.getenv("SQL_CONNECTION_STRING") else "❌ missing",
+        "SQL_CONNECTION_STRING": "set" if os.getenv("SQL_CONNECTION_STRING") else "missing",
     }
     return render_template("admin.html", status=status)
 
@@ -75,7 +75,7 @@ def health():
 
 
 # ===============================
-# 🔍 DEBUG SUPERPOWER ROUTE
+# DEBUG SUPERPOWER ROUTE
 # Shows SDK versions for troubleshooting
 # ===============================
 @app.get("/versions")

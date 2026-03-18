@@ -453,12 +453,34 @@ def api_chat():
         if err:
             return jsonify({"error": err}), 500
 
+        # Fetch conversation history for this session (most recent 20 messages)
+        history = []
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content FROM messages "
+                "WHERE session_id = ? ORDER BY timestamp ASC",
+                (session_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            # Keep only the last 20 to stay within token limits
+            history = [{"role": row[0], "content": row[1]} for row in rows[-20:]]
+        except Exception:
+            # History is best-effort — proceed with empty history if DB fails
+            app.logger.exception("Failed to load message history")
+
+        # Build the full messages array: system prompt + history + current user message
+        messages = [
+            {"role": "system", "content": "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview students about their professional experience and help them articulate their skills for academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help them identify relevant evidence of their learning. Start by asking what course or competency area they want to receive credit for."},
+            *history,
+            {"role": "user", "content": user_message},
+        ]
+
         response = client.chat.completions.create(
             model=deployment,
-            messages=[
-                {"role": "system", "content": "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview students about their professional experience and help them articulate their skills for academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help them identify relevant evidence of their learning. Start by asking what course or competency area they want to receive credit for."},
-                {"role": "user", "content": user_message},
-            ],
+            messages=messages,
             temperature=0.3,
         )
 

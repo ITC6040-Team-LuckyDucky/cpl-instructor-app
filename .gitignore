@@ -1,0 +1,5 @@
+local_dev.db
+local_uploads/
+.env
+__pycache__/
+venv/

@@ -45,6 +45,32 @@
         background-color: #cccccc;
         cursor: not-allowed;
       }
+      #uploadedFiles {
+        margin-top: 16px;
+      }
+      #uploadedFiles h4 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        color: #555;
+      }
+      .file-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .file-list li {
+        padding: 6px 8px;
+        border-bottom: 1px solid #e0e0e0;
+        font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .file-list li:last-child {
+        border-bottom: none;
+      }
+      .file-list .file-size {
+        color: #888;
+      }
     </style>
   </head>
   <body>
@@ -63,6 +89,7 @@
       </div>
       <div id="selectedFile" class="selected-file" style="display: none;"></div>
       <button id="uploadBtn" class="upload-btn" disabled>Upload</button>
+      <div id="uploadedFiles"></div>
     </div>
 
     <h3>Response</h3>
@@ -154,6 +181,31 @@
       }
 
       // Handle file upload
+      // Load and display uploaded files
+      async function loadUploadedFiles() {
+        const container = document.getElementById("uploadedFiles");
+        try {
+          const res = await fetch("/api/uploads");
+          const data = await res.json();
+          if (!res.ok || !data.uploads) { container.innerHTML = ""; return; }
+
+          if (data.uploads.length === 0) {
+            container.innerHTML = "<h4>Uploaded Files</h4><p style='font-size:13px;color:#888;'>No files uploaded yet.</p>";
+            return;
+          }
+
+          const items = data.uploads.map(u =>
+            `<li><span>${u.filename}</span><span class="file-size">${formatFileSize(u.size)}</span></li>`
+          ).join("");
+          container.innerHTML = `<h4>Uploaded Files</h4><ul class="file-list">${items}</ul>`;
+        } catch (e) {
+          container.innerHTML = "";
+        }
+      }
+
+      // Load file list on page load
+      loadUploadedFiles();
+
       uploadBtn.addEventListener("click", async () => {
         if (!selectedFile) return;
 
@@ -179,6 +231,7 @@
             fileInput.value = "";
             selectedFile = null;
             selectedFileDiv.style.display = "none";
+            loadUploadedFiles();
           }
         } catch (e) {
           alert("Network error during upload");

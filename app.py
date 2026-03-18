@@ -1,9 +1,10 @@
 import os
+import uuid
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from openai import AzureOpenAI
 
-# NEW: DB test imports
-import pyodbc
+from db import get_db_connection, is_local_dev
+from storage import upload_file, ensure_storage_ready
 
 
 # Explicit template folder for Azure App Service reliability
@@ -63,8 +64,9 @@ def admin_page():
         "AZURE_OPENAI_API_KEY": " set" if os.getenv("AZURE_OPENAI_API_KEY") else "missing",
         "AZURE_OPENAI_API_VERSION": os.getenv("AZURE_OPENAI_API_VERSION") or "(default: 2024-12-01-preview)",
         "AZURE_OPENAI_DEPLOYMENT": " set" if os.getenv("AZURE_OPENAI_DEPLOYMENT") else "missing",
-        # NEW: show whether SQL conn string is present (but never show its value)
+        # Show whether connection strings are present (never expose the actual values)
         "SQL_CONNECTION_STRING": "set" if os.getenv("SQL_CONNECTION_STRING") else "missing",
+        "AZURE_STORAGE_CONNECTION_STRING": "set" if os.getenv("AZURE_STORAGE_CONNECTION_STRING") else "missing",
     }
     return render_template("admin.html", status=status)
 
@@ -98,21 +100,19 @@ def versions():
 # ===============================
 @app.get("/dbcheck")
 def dbcheck():
-    conn_str = os.getenv("SQL_CONNECTION_STRING")
-    if not conn_str:
-        return jsonify({"error": "Missing SQL_CONNECTION_STRING"}), 500
-
     try:
-        # Keep it simple: open connection and run a tiny query
-        conn = pyodbc.connect(conn_str, timeout=10)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         row = cursor.fetchone()
         conn.close()
 
-        return jsonify({"status": "DB Connected", "result": int(row[0])})
+        return jsonify({
+            "status": "DB Connected",
+            "result": int(row[0]),
+            "mode": "local (SQLite)" if is_local_dev() else "Azure SQL",
+        })
     except Exception as e:
-        # Log full traceback in Azure Log Stream
         app.logger.exception("DB connection check failed")
         return jsonify({
             "error": f"DB check failed: {type(e).__name__}",
@@ -126,64 +126,98 @@ def dbcheck():
 # ===============================
 @app.get("/setup-db")
 def setup_db():
-    conn_str = os.getenv("SQL_CONNECTION_STRING")
-    if not conn_str:
-        return jsonify({"error": "Missing SQL_CONNECTION_STRING"}), 500
-
     try:
-        conn = pyodbc.connect(conn_str, timeout=10)
+        conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Create sessions table
-        cursor.execute("""
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='sessions' AND xtype='U')
-            CREATE TABLE sessions (
-                session_id NVARCHAR(50) PRIMARY KEY,
-                created_at DATETIME DEFAULT GETDATE(),
-                user_label NVARCHAR(100)
-            )
-        """)
+        if is_local_dev():
+            # SQLite syntax
+            cursor.executescript("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    user_label TEXT
+                );
 
-        # Create messages table
-        cursor.execute("""
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='messages' AND xtype='U')
-            CREATE TABLE messages (
-                id INT IDENTITY(1,1) PRIMARY KEY,
-                session_id NVARCHAR(50) NOT NULL,
-                role NVARCHAR(20) NOT NULL,
-                content NVARCHAR(MAX),
-                timestamp DATETIME DEFAULT GETDATE(),
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
 
-        # Create uploads table
-        cursor.execute("""
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='uploads' AND xtype='U')
-            CREATE TABLE uploads (
-                upload_id NVARCHAR(50) PRIMARY KEY,
-                session_id NVARCHAR(50) NOT NULL,
-                filename NVARCHAR(255),
-                blob_url NVARCHAR(500),
-                content_type NVARCHAR(100),
-                size INT,
-                uploaded_at DATETIME DEFAULT GETDATE(),
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS uploads (
+                    upload_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    filename TEXT,
+                    blob_url TEXT,
+                    content_type TEXT,
+                    size INTEGER,
+                    uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    extracted_text TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
 
-        # Create summaries table
-        cursor.execute("""
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='summaries' AND xtype='U')
-            CREATE TABLE summaries (
-                id INT IDENTITY(1,1) PRIMARY KEY,
-                session_id NVARCHAR(50) NOT NULL,
-                summary_text NVARCHAR(MAX),
-                created_at DATETIME DEFAULT GETDATE(),
-                model_version NVARCHAR(50),
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    summary_text TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    model_version TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+            """)
+        else:
+            # Azure SQL syntax
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='sessions' AND xtype='U')
+                CREATE TABLE sessions (
+                    session_id NVARCHAR(50) PRIMARY KEY,
+                    created_at DATETIME DEFAULT GETDATE(),
+                    user_label NVARCHAR(100)
+                )
+            """)
+
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='messages' AND xtype='U')
+                CREATE TABLE messages (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    session_id NVARCHAR(50) NOT NULL,
+                    role NVARCHAR(20) NOT NULL,
+                    content NVARCHAR(MAX),
+                    timestamp DATETIME DEFAULT GETDATE(),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='uploads' AND xtype='U')
+                CREATE TABLE uploads (
+                    upload_id NVARCHAR(50) PRIMARY KEY,
+                    session_id NVARCHAR(50) NOT NULL,
+                    filename NVARCHAR(255),
+                    blob_url NVARCHAR(500),
+                    content_type NVARCHAR(100),
+                    size INT,
+                    uploaded_at DATETIME DEFAULT GETDATE(),
+                    extracted_text NVARCHAR(MAX),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='summaries' AND xtype='U')
+                CREATE TABLE summaries (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    session_id NVARCHAR(50) NOT NULL,
+                    summary_text NVARCHAR(MAX),
+                    created_at DATETIME DEFAULT GETDATE(),
+                    model_version NVARCHAR(50),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
 
         conn.commit()
         conn.close()
@@ -191,7 +225,8 @@ def setup_db():
         return jsonify({
             "status": "success",
             "message": "Database tables created successfully",
-            "tables": ["sessions", "messages", "uploads", "summaries"]
+            "mode": "local (SQLite)" if is_local_dev() else "Azure SQL",
+            "tables": ["sessions", "messages", "uploads", "summaries"],
         })
 
     except Exception as e:
@@ -200,6 +235,170 @@ def setup_db():
             "error": f"Database setup failed: {type(e).__name__}",
             "details": str(e),
         }), 500
+
+
+# ===============================
+# DB MIGRATION ROUTE
+# Adds extracted_text column to existing uploads table
+# ===============================
+@app.get("/migrate-uploads")
+def migrate_uploads():
+    if is_local_dev():
+        # SQLite schema already includes extracted_text; nothing to do
+        return jsonify({
+            "status": "success",
+            "message": "Local dev: extracted_text already present in SQLite schema",
+            "mode": "local (SQLite)",
+        })
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('uploads') AND name = 'extracted_text')
+                ALTER TABLE uploads ADD extracted_text NVARCHAR(MAX)
+        """)
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({"status": "success", "message": "Migration complete: extracted_text column ensured on uploads table"})
+
+    except Exception as e:
+        app.logger.exception("Migration failed")
+        return jsonify({
+            "error": f"Migration failed: {type(e).__name__}",
+            "details": str(e),
+        }), 500
+
+
+# ===============================
+# File Upload Endpoint
+# ===============================
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx"}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+def extract_text(file_bytes, ext):
+    if ext == ".txt":
+        return file_bytes.decode("utf-8", errors="replace")
+
+    if ext == ".pdf":
+        import io
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(file_bytes))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    if ext == ".docx":
+        import io
+        from docx import Document
+        doc = Document(io.BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs)
+
+    return None
+
+
+@app.post("/api/upload")
+def api_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    f = request.files["file"]
+    filename = f.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": f"File type '{ext}' not allowed. Use .pdf, .txt, or .docx"}), 400
+
+    file_bytes = f.read()
+    if len(file_bytes) > MAX_FILE_SIZE:
+        return jsonify({"error": "File exceeds 10 MB limit"}), 400
+
+    upload_id = str(uuid.uuid4())
+
+    # Store file via storage helper (Azure Blob or local folder)
+    try:
+        ensure_storage_ready()
+        blob_url = upload_file(file_bytes, filename, upload_id)
+    except Exception as e:
+        app.logger.exception("File storage failed")
+        return jsonify({"error": f"File storage failed: {type(e).__name__}", "details": str(e)}), 500
+
+    # Extract text — failure is non-fatal
+    extracted_text = None
+    try:
+        extracted_text = extract_text(file_bytes, ext)
+    except Exception:
+        app.logger.exception("Text extraction failed; storing NULL")
+
+    # Save record to DB
+    try:
+        # TODO (Phase 3): replace "default" with the real session_id sent by the frontend
+        session_id = "default"
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO uploads
+                (upload_id, session_id, filename, blob_url, content_type, size, uploaded_at, extracted_text)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """,
+            (upload_id,
+            session_id,
+            filename,
+            blob_url,
+            f.content_type or "",
+            len(file_bytes),
+            extracted_text),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        app.logger.exception("DB insert failed")
+        return jsonify({"error": f"DB insert failed: {type(e).__name__}", "details": str(e)}), 500
+
+    return jsonify({
+        "status": "success",
+        "upload_id": upload_id,
+        "filename": filename,
+        "size": len(file_bytes),
+        "extracted_text_length": len(extracted_text) if extracted_text else 0,
+    })
+
+
+# ===============================
+# List Uploads Endpoint
+# ===============================
+@app.get("/api/uploads")
+def api_list_uploads():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT upload_id, filename, content_type, size, uploaded_at, blob_url "
+            "FROM uploads ORDER BY uploaded_at DESC"
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        uploads = [
+            {
+                "upload_id": row[0],
+                "filename":  row[1],
+                "content_type": row[2],
+                "size": row[3],
+                "uploaded_at": str(row[4]),
+                "blob_url": row[5],
+            }
+            for row in rows
+        ]
+        return jsonify({"uploads": uploads})
+
+    except Exception as e:
+        app.logger.exception("Failed to list uploads")
+        return jsonify({"error": f"Failed to list uploads: {type(e).__name__}", "details": str(e)}), 500
 
 
 # ===============================
@@ -247,4 +446,8 @@ def api_chat():
 # Local Dev Entry Point
 # ===============================
 if __name__ == "__main__":
+    if is_local_dev():
+        print("Running in LOCAL DEV mode (SQLite + local file storage)")
+    else:
+        print("Running in AZURE mode")
     app.run(host="0.0.0.0", port=8000)

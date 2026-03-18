@@ -12,6 +12,227 @@ app = Flask(__name__, template_folder="templates")
 
 
 # ===============================
+# Auto DB Initialization
+# Runs table creation once on the first request so the app is ready
+# without needing a manual /setup-db call.
+# ===============================
+_db_initialized = False
+
+@app.before_request
+def ensure_db_initialized():
+    global _db_initialized
+    if _db_initialized:
+        return
+    _db_initialized = True  # Set early so a parallel request doesn't double-run
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if is_local_dev():
+            cursor.executescript("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    user_label TEXT
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+                CREATE TABLE IF NOT EXISTS uploads (
+                    upload_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    filename TEXT,
+                    blob_url TEXT,
+                    content_type TEXT,
+                    size INTEGER,
+                    uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    extracted_text TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+                CREATE TABLE IF NOT EXISTS summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    summary_text TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    model_version TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+                CREATE TABLE IF NOT EXISTS interview_state (
+                    session_id TEXT PRIMARY KEY,
+                    current_stage TEXT NOT NULL DEFAULT 'welcome',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+            """)
+        else:
+            for stmt in [
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='sessions' AND xtype='U')
+                   CREATE TABLE sessions (
+                       session_id NVARCHAR(50) PRIMARY KEY,
+                       created_at DATETIME DEFAULT GETDATE(),
+                       user_label NVARCHAR(100)
+                   )""",
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='messages' AND xtype='U')
+                   CREATE TABLE messages (
+                       id INT IDENTITY(1,1) PRIMARY KEY,
+                       session_id NVARCHAR(50) NOT NULL,
+                       role NVARCHAR(20) NOT NULL,
+                       content NVARCHAR(MAX),
+                       timestamp DATETIME DEFAULT GETDATE(),
+                       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                   )""",
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='uploads' AND xtype='U')
+                   CREATE TABLE uploads (
+                       upload_id NVARCHAR(50) PRIMARY KEY,
+                       session_id NVARCHAR(50) NOT NULL,
+                       filename NVARCHAR(255),
+                       blob_url NVARCHAR(500),
+                       content_type NVARCHAR(100),
+                       size INT,
+                       uploaded_at DATETIME DEFAULT GETDATE(),
+                       extracted_text NVARCHAR(MAX),
+                       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                   )""",
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='summaries' AND xtype='U')
+                   CREATE TABLE summaries (
+                       id INT IDENTITY(1,1) PRIMARY KEY,
+                       session_id NVARCHAR(50) NOT NULL,
+                       summary_text NVARCHAR(MAX),
+                       created_at DATETIME DEFAULT GETDATE(),
+                       model_version NVARCHAR(50),
+                       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                   )""",
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='interview_state' AND xtype='U')
+                   CREATE TABLE interview_state (
+                       session_id NVARCHAR(50) PRIMARY KEY,
+                       current_stage NVARCHAR(50) NOT NULL DEFAULT 'welcome',
+                       updated_at DATETIME DEFAULT GETDATE(),
+                       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                   )""",
+            ]:
+                cursor.execute(stmt)
+
+        conn.commit()
+        conn.close()
+    except Exception:
+        app.logger.warning("Auto DB initialization failed — tables may not exist yet", exc_info=True)
+
+
+# ===============================
+# Interview Stage Definitions
+# The bot follows this fixed sequence; the app (not the LLM) decides when to advance.
+# ===============================
+INTERVIEW_STAGES = [
+    "welcome",           # Stage 1: Greet and get student's name
+    "course_id",         # Stage 2: Identify course/competency area
+    "experience",        # Stage 3: Background — where, how long, role
+    "skills_reflection", # Stage 4: Skills, knowledge, examples
+    "evidence",          # Stage 5: Evidence and document upload
+    "summary",           # Stage 6: Summarize and confirm (final stage)
+]
+
+
+def get_current_stage(session_id):
+    """Returns the current interview stage for the given session, or 'welcome' if not found."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT current_stage FROM interview_state WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else "welcome"
+    except Exception:
+        app.logger.exception("Failed to get current stage")
+        return "welcome"
+
+
+def advance_stage(session_id, current_stage):
+    """
+    Moves the session to the next stage in INTERVIEW_STAGES.
+    Does nothing if already at the final stage.
+    Returns the new stage name.
+    """
+    if current_stage not in INTERVIEW_STAGES:
+        return current_stage
+    idx = INTERVIEW_STAGES.index(current_stage)
+    if idx >= len(INTERVIEW_STAGES) - 1:
+        return current_stage  # Already at final stage
+    next_stage = INTERVIEW_STAGES[idx + 1]
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE interview_state SET current_stage = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE session_id = ?",
+            (next_stage, session_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        app.logger.exception("Failed to advance stage")
+    return next_stage
+
+
+def should_advance(current_stage, user_message, assistant_response):
+    """
+    Simple heuristic check — returns True if the conversation has collected
+    enough information to move past the current stage.
+    The LLM does NOT make this decision; the app does.
+    """
+    msg = user_message.lower()
+    words = msg.split()
+
+    if current_stage == "welcome":
+        # Advance when the user has given a substantive reply (likely includes their name)
+        return len(words) >= 2
+
+    if current_stage == "course_id":
+        # Advance when the user mentions a course, subject, or programme
+        course_keywords = [
+            "course", "class", "subject", "program", "programme", "module",
+            "degree", "certificate", "diploma", "credit", "unit",
+        ]
+        return any(kw in msg for kw in course_keywords) or len(words) >= 4
+
+    if current_stage == "experience":
+        # Advance when the user describes a work role or duration
+        experience_keywords = [
+            "worked", "work", "job", "role", "position", "years", "months",
+            "manager", "engineer", "developer", "nurse", "teacher", "director",
+            "employed", "company", "organization", "team", "project",
+        ]
+        return any(kw in msg for kw in experience_keywords)
+
+    if current_stage == "skills_reflection":
+        # Advance when the user gives a concrete example or description
+        reflection_keywords = [
+            "example", "instance", "specifically", "when i", "i did",
+            "i used", "i learned", "i managed", "i built", "i created",
+            "i led", "responsible", "skill", "knowledge", "ability",
+        ]
+        return any(kw in msg for kw in reflection_keywords) or len(words) >= 15
+
+    if current_stage == "evidence":
+        # Advance when the user indicates they have provided or have no more evidence
+        evidence_keywords = [
+            "uploaded", "attached", "no more", "that's all", "done",
+            "no evidence", "nothing else", "finished", "complete",
+        ]
+        return any(kw in msg for kw in evidence_keywords)
+
+    # "summary" is the final stage — never advance
+    return False
+
+
+# ===============================
 # Azure OpenAI Client Factory
 # ===============================
 def get_client():
@@ -168,6 +389,13 @@ def setup_db():
                     model_version TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS interview_state (
+                    session_id TEXT PRIMARY KEY,
+                    current_stage TEXT NOT NULL DEFAULT 'welcome',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
             """)
         else:
             # Azure SQL syntax
@@ -219,6 +447,16 @@ def setup_db():
                 )
             """)
 
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='interview_state' AND xtype='U')
+                CREATE TABLE interview_state (
+                    session_id NVARCHAR(50) PRIMARY KEY,
+                    current_stage NVARCHAR(50) NOT NULL DEFAULT 'welcome',
+                    updated_at DATETIME DEFAULT GETDATE(),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
         conn.commit()
         conn.close()
 
@@ -226,7 +464,7 @@ def setup_db():
             "status": "success",
             "message": "Database tables created successfully",
             "mode": "local (SQLite)" if is_local_dev() else "Azure SQL",
-            "tables": ["sessions", "messages", "uploads", "summaries"],
+            "tables": ["sessions", "messages", "uploads", "summaries", "interview_state"],
         })
 
     except Exception as e:
@@ -332,11 +570,13 @@ def api_upload():
     except Exception:
         app.logger.exception("Text extraction failed; storing NULL")
 
+    # Read session_id from the form data (set by the frontend after /api/session)
+    session_id = (request.form.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+
     # Save record to DB
     try:
-        # TODO (Phase 3): replace "default" with the real session_id sent by the frontend
-        session_id = "default"
-
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -402,16 +642,51 @@ def api_list_uploads():
 
 
 # ===============================
+# Session Endpoint
+# Creates a new session row and returns its ID
+# ===============================
+@app.post("/api/session")
+def api_session():
+    try:
+        session_id = str(uuid.uuid4())
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Insert new session row; created_at defaults to now in both SQLite and Azure SQL
+        cursor.execute(
+            "INSERT INTO sessions (session_id) VALUES (?)",
+            (session_id,),
+        )
+        # Seed the interview state at the first stage
+        cursor.execute(
+            "INSERT INTO interview_state (session_id, current_stage) VALUES (?, ?)",
+            (session_id, INTERVIEW_STAGES[0]),
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({"session_id": session_id, "stage": INTERVIEW_STAGES[0]})
+
+    except Exception as e:
+        app.logger.exception("Failed to create session")
+        return jsonify({"error": f"Failed to create session: {type(e).__name__}", "details": str(e)}), 500
+
+
+# ===============================
 # Chat API Endpoint
+# Requires session_id; persists user + assistant messages to DB
 # ===============================
 @app.post("/api/chat")
 def api_chat():
     try:
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
+        session_id = (data.get("session_id") or "").strip()
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
 
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
         if not deployment:
@@ -421,21 +696,75 @@ def api_chat():
         if err:
             return jsonify({"error": err}), 500
 
+        # Fetch conversation history for this session (most recent 20 messages)
+        history = []
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content FROM messages "
+                "WHERE session_id = ? ORDER BY timestamp ASC",
+                (session_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            # Keep only the last 20 to stay within token limits
+            history = [{"role": row[0], "content": row[1]} for row in rows[-20:]]
+        except Exception:
+            # History is best-effort — proceed with empty history if DB fails
+            app.logger.exception("Failed to load message history")
+
+        # Read current stage so we can inform the LLM which part of the interview we're in
+        current_stage = get_current_stage(session_id)
+
+        # Build the full messages array: system prompt + history + current user message
+        messages = [
+            {"role": "system", "content": (
+                "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview "
+                "students about their professional experience and help them articulate their skills for "
+                "academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help "
+                "them identify relevant evidence of their learning. Start by asking what course or "
+                "competency area they want to receive credit for.\n\n"
+                f"Current interview stage: {current_stage}"
+            )},
+            *history,
+            {"role": "user", "content": user_message},
+        ]
+
         response = client.chat.completions.create(
             model=deployment,
-            messages=[
-                {"role": "system", "content": "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview students about their professional experience and help them articulate their skills for academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help them identify relevant evidence of their learning. Start by asking what course or competency area they want to receive credit for."},
-                {"role": "user", "content": user_message},
-            ],
+            messages=messages,
             temperature=0.3,
         )
 
         answer = (response.choices[0].message.content or "").strip()
 
-        return jsonify({"answer": answer})
+        # Save both turns to the messages table
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+                (session_id, "user", user_message),
+            )
+            cursor.execute(
+                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+                (session_id, "assistant", answer),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            # Log but don't fail the chat response — message saving is best-effort
+            app.logger.exception("Failed to save messages to DB")
+
+        # Check whether the app should advance to the next interview stage
+        # (current_stage was already fetched above before the OpenAI call)
+        if should_advance(current_stage, user_message, answer):
+            current_stage = advance_stage(session_id, current_stage)
+
+        return jsonify({"answer": answer, "stage": current_stage})
 
     except Exception as e:
-        # Log full traceback in Azure Log Stream
         app.logger.exception("Azure OpenAI call failed")
         return jsonify({
             "error": f"Azure OpenAI call failed: {type(e).__name__}"

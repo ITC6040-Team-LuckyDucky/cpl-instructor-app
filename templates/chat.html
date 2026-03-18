@@ -76,6 +76,7 @@
   <body>
     <h2>CPL Chat Demo</h2>
     <p>Type a prompt and call Azure OpenAI through the Web App.</p>
+    <p style="font-size:13px;color:#666;">Session: <code id="sessionLabel">starting...</code> &nbsp; <button id="newSessionBtn" style="font-size:12px;">New Session</button></p>
 
     <textarea id="msg" placeholder="Ask something..."></textarea>
     <br/><br/>
@@ -96,17 +97,52 @@
     <pre id="out"></pre>
 
     <script>
+      // -----------------------------------------------
+      // Session management
+      // -----------------------------------------------
+      let sessionId = null;
+
+      // Call /api/session to get a fresh session_id and update the UI label
+      async function initSession() {
+        try {
+          const res = await fetch("/api/session", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) { console.error("Session init failed", data); return; }
+          sessionId = data.session_id;
+          document.getElementById("sessionLabel").textContent = sessionId.slice(0, 8) + "...";
+        } catch (e) {
+          console.error("Network error starting session", e);
+        }
+      }
+
+      // "New Session" button: create a new session and reset the chat output
+      document.getElementById("newSessionBtn").addEventListener("click", async () => {
+        await initSession();
+        document.getElementById("out").textContent = "";
+        document.getElementById("msg").value = "";
+      });
+
+      // Start a session immediately on page load
+      initSession();
+
+      // -----------------------------------------------
       // Chat functionality
+      // -----------------------------------------------
       document.getElementById("send").addEventListener("click", async () => {
         const msg = document.getElementById("msg").value.trim();
         const out = document.getElementById("out");
         out.textContent = "Thinking...";
 
+        if (!sessionId) {
+          out.textContent = "No active session. Please wait or click New Session.";
+          return;
+        }
+
         try {
           const res = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: msg }),
+            body: JSON.stringify({ message: msg, session_id: sessionId }),
           });
 
           const data = await res.json();
@@ -209,8 +245,14 @@
       uploadBtn.addEventListener("click", async () => {
         if (!selectedFile) return;
 
+        if (!sessionId) {
+          alert("No active session. Please wait or click New Session.");
+          return;
+        }
+
         const formData = new FormData();
         formData.append("file", selectedFile);
+        formData.append("session_id", sessionId);
 
         uploadBtn.disabled = true;
         uploadBtn.textContent = "Uploading...";

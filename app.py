@@ -332,14 +332,15 @@ def api_upload():
     except Exception:
         app.logger.exception("Text extraction failed; storing NULL")
 
+    # Read session_id from the form data (set by the frontend after /api/session)
+    session_id = (request.form.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+
     # Save record to DB
     try:
-        # TODO (Phase 3): replace "default" with the real session_id sent by the frontend
-        session_id = "default"
-
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("IF NOT EXISTS (SELECT 1 FROM sessions WHERE session_id = ?) INSERT INTO sessions (session_id) VALUES (?)", (session_id, session_id))
         cursor.execute(
             """
             INSERT INTO uploads
@@ -403,16 +404,46 @@ def api_list_uploads():
 
 
 # ===============================
+# Session Endpoint
+# Creates a new session row and returns its ID
+# ===============================
+@app.post("/api/session")
+def api_session():
+    try:
+        session_id = str(uuid.uuid4())
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Insert new session row; created_at defaults to now in both SQLite and Azure SQL
+        cursor.execute(
+            "INSERT INTO sessions (session_id) VALUES (?)",
+            (session_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({"session_id": session_id})
+
+    except Exception as e:
+        app.logger.exception("Failed to create session")
+        return jsonify({"error": f"Failed to create session: {type(e).__name__}", "details": str(e)}), 500
+
+
+# ===============================
 # Chat API Endpoint
+# Requires session_id; persists user + assistant messages to DB
 # ===============================
 @app.post("/api/chat")
 def api_chat():
     try:
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
+        session_id = (data.get("session_id") or "").strip()
 
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
 
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
         if not deployment:
@@ -433,10 +464,27 @@ def api_chat():
 
         answer = (response.choices[0].message.content or "").strip()
 
+        # Save both turns to the messages table
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+                (session_id, "user", user_message),
+            )
+            cursor.execute(
+                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+                (session_id, "assistant", answer),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            # Log but don't fail the chat response — message saving is best-effort
+            app.logger.exception("Failed to save messages to DB")
+
         return jsonify({"answer": answer})
 
     except Exception as e:
-        # Log full traceback in Azure Log Stream
         app.logger.exception("Azure OpenAI call failed")
         return jsonify({
             "error": f"Azure OpenAI call failed: {type(e).__name__}"

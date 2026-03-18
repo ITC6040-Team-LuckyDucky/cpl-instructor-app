@@ -137,6 +137,64 @@ INTERVIEW_STAGES = [
 ]
 
 
+def get_system_prompt(stage, collected_data=None):
+    """
+    Returns a stage-specific system prompt that constrains the bot to the
+    current interview topic. collected_data is a dict with keys like
+    'name', 'course', 'experience_summary' populated by prior stages.
+    """
+    d = collected_data or {}
+    name = d.get("name") or "the student"
+    course = d.get("course") or "their chosen course"
+    experience_summary = d.get("experience_summary") or "their prior experience"
+
+    prompts = {
+        "welcome": (
+            "You are a CPL (Credit for Prior Learning) interview assistant. "
+            "Welcome the student warmly. Explain that you'll guide them through a structured "
+            "interview to help them document their prior learning for academic credit. "
+            "Ask for their name. Keep it brief and friendly. "
+            "Do NOT ask about courses or experience yet."
+        ),
+        "course_id": (
+            f"You are a CPL interview assistant. The student's name is {name}. "
+            "Now ask them which course or competency area they want to receive credit for. "
+            "Help them clarify if they're unsure. "
+            "Stay focused on identifying the specific course — do not move on to other topics yet."
+        ),
+        "experience": (
+            f"You are a CPL interview assistant helping {name} seek credit for {course}. "
+            "Ask about their relevant professional or life experience. Find out: where they gained "
+            "the experience (employer, military, self-study, etc.), how long they did it, and what "
+            "their role and responsibilities were. Ask follow-up questions to get specifics. "
+            "Do not move to other topics yet."
+        ),
+        "skills_reflection": (
+            f"You are a CPL interview assistant helping {name} seek credit for {course}. "
+            f"They have experience in {experience_summary}. "
+            "Now help them reflect on what they learned. Ask them to describe specific skills and "
+            "knowledge they gained. Ask for concrete examples that demonstrate their learning. "
+            "Relate their answers back to academic learning outcomes when possible."
+        ),
+        "evidence": (
+            f"You are a CPL interview assistant helping {name} seek credit for {course}. "
+            "Now ask about evidence they can provide to support their claim. This could include: "
+            "certificates, portfolios, work samples, reference letters, performance reviews, etc. "
+            "They can upload documents using the upload button. Ask if they have any documents to "
+            "upload or if they want to describe their evidence verbally."
+        ),
+        "summary": (
+            "You are a CPL interview assistant. The interview is nearly complete. "
+            "Summarize everything the student has shared: their name, the course they're seeking "
+            "credit for, their experience, the skills and knowledge they demonstrated, and any "
+            "evidence provided. Ask them to confirm if the summary is accurate or if they want to "
+            "change anything. Be thorough but concise."
+        ),
+    }
+
+    return prompts.get(stage, prompts["welcome"])
+
+
 def get_current_stage(session_id):
     """Returns the current interview stage for the given session, or 'welcome' if not found."""
     try:
@@ -717,16 +775,11 @@ def api_chat():
         # Read current stage so we can inform the LLM which part of the interview we're in
         current_stage = get_current_stage(session_id)
 
-        # Build the full messages array: system prompt + history + current user message
+        # Build the full messages array: stage-specific system prompt + history + current turn
+        # collected_data will be populated in Piece 5; pass None for now
+        system_prompt = get_system_prompt(current_stage, collected_data=None)
         messages = [
-            {"role": "system", "content": (
-                "You are a CPL (Credit for Prior Learning) advisor assistant. Your job is to interview "
-                "students about their professional experience and help them articulate their skills for "
-                "academic credit evaluation. Be friendly, ask clarifying follow-up questions, and help "
-                "them identify relevant evidence of their learning. Start by asking what course or "
-                "competency area they want to receive credit for.\n\n"
-                f"Current interview stage: {current_stage}"
-            )},
+            {"role": "system", "content": system_prompt},
             *history,
             {"role": "user", "content": user_message},
         ]

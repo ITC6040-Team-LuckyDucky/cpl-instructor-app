@@ -339,6 +339,7 @@ def api_upload():
 
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute("IF NOT EXISTS (SELECT 1 FROM sessions WHERE session_id = ?) INSERT INTO sessions (session_id) VALUES (?)", (session_id, session_id))
         cursor.execute(
             """
             INSERT INTO uploads

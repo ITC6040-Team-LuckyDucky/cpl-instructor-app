@@ -68,6 +68,15 @@ def ensure_db_initialized():
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 );
+                CREATE TABLE IF NOT EXISTS collected_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    field_value TEXT,
+                    stage TEXT,
+                    collected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
             """)
         else:
             for stmt in [
@@ -114,6 +123,16 @@ def ensure_db_initialized():
                        updated_at DATETIME DEFAULT GETDATE(),
                        FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                    )""",
+                """IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='collected_data' AND xtype='U')
+                   CREATE TABLE collected_data (
+                       id INT IDENTITY(1,1) PRIMARY KEY,
+                       session_id NVARCHAR(50) NOT NULL,
+                       field_name NVARCHAR(100) NOT NULL,
+                       field_value NVARCHAR(MAX),
+                       stage NVARCHAR(50),
+                       collected_at DATETIME DEFAULT GETDATE(),
+                       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                   )""",
             ]:
                 cursor.execute(stmt)
 
@@ -136,6 +155,17 @@ INTERVIEW_STAGES = [
     "summary",           # Stage 6: Summarize and confirm (final stage)
 ]
 
+# Fields to extract from the conversation at each stage.
+# The extraction LLM call uses these to know what JSON keys to return.
+STAGE_FIELDS = {
+    "welcome":           ["student_name"],
+    "course_id":         ["course_name", "competency_area"],
+    "experience":        ["experience_description", "employer_or_source", "role", "duration"],
+    "skills_reflection": ["skills_learned", "concrete_examples"],
+    "evidence":          ["evidence_description", "uploaded_documents"],
+    "summary":           [],  # Nothing new to extract at summary stage
+}
+
 
 def get_system_prompt(stage, collected_data=None):
     """
@@ -144,9 +174,9 @@ def get_system_prompt(stage, collected_data=None):
     'name', 'course', 'experience_summary' populated by prior stages.
     """
     d = collected_data or {}
-    name = d.get("name") or "the student"
-    course = d.get("course") or "their chosen course"
-    experience_summary = d.get("experience_summary") or "their prior experience"
+    name = d.get("student_name") or "the student"
+    course = d.get("course_name") or d.get("competency_area") or "their chosen course"
+    experience_summary = d.get("experience_description") or "their prior experience"
 
     prompts = {
         "welcome": (
@@ -288,6 +318,94 @@ def should_advance(current_stage, user_message, assistant_response):
 
     # "summary" is the final stage — never advance
     return False
+
+
+def get_collected_data(session_id):
+    """
+    Returns all collected structured data for a session as a flat dict
+    {field_name: field_value}. When a field has been collected more than
+    once (e.g. the student corrected their name) the most-recent value wins.
+    """
+    result = {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Order ASC so later rows overwrite earlier ones in the dict
+        cursor.execute(
+            "SELECT field_name, field_value FROM collected_data "
+            "WHERE session_id = ? ORDER BY collected_at ASC",
+            (session_id,),
+        )
+        for row in cursor.fetchall():
+            result[row[0]] = row[1]
+        conn.close()
+    except Exception:
+        app.logger.exception("Failed to load collected data")
+    return result
+
+
+def extract_fields(session_id, stage, user_message, assistant_response):
+    """
+    Makes a SEPARATE Azure OpenAI call to extract structured fields from the
+    latest conversation exchange and saves them to the collected_data table.
+
+    Skipped gracefully if:
+      - The stage has no fields to extract
+      - Azure OpenAI env vars are missing (e.g. local dev without Azure)
+      - The LLM returns unparseable JSON
+    """
+    import json
+
+    fields = STAGE_FIELDS.get(stage, [])
+    if not fields:
+        return  # Nothing to extract at this stage
+
+    # Skip if Azure OpenAI is not configured (safe for local dev)
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    if not deployment:
+        return
+
+    client, err = get_client()
+    if err:
+        app.logger.warning(f"extract_fields: skipping — {err}")
+        return
+
+    fields_str = ", ".join(f'"{f}"' for f in fields)
+    extraction_prompt = (
+        f"Given the following conversation exchange, extract these fields as JSON: [{fields_str}]. "
+        "Return ONLY valid JSON with exactly those keys. "
+        'If a field is not mentioned or cannot be determined, use null. '
+        "Do not include any explanation or extra text — ONLY the JSON object.\n\n"
+        f"User said: {user_message}\n"
+        f"Assistant said: {assistant_response}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[{"role": "user", "content": extraction_prompt}],
+            temperature=0,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        extracted = json.loads(raw)
+
+        # Save each non-null field to the DB
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for field_name, field_value in extracted.items():
+            if field_value is not None and field_name in fields:
+                cursor.execute(
+                    "INSERT INTO collected_data "
+                    "(session_id, field_name, field_value, stage, collected_at) "
+                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (session_id, field_name, str(field_value), stage),
+                )
+        conn.commit()
+        conn.close()
+
+    except Exception:
+        # Extraction is best-effort — never crash the chat response
+        app.logger.exception("extract_fields failed; continuing without extracted data")
 
 
 # ===============================
@@ -454,6 +572,16 @@ def setup_db():
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS collected_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    field_value TEXT,
+                    stage TEXT,
+                    collected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
             """)
         else:
             # Azure SQL syntax
@@ -515,6 +643,19 @@ def setup_db():
                 )
             """)
 
+            cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='collected_data' AND xtype='U')
+                CREATE TABLE collected_data (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    session_id NVARCHAR(50) NOT NULL,
+                    field_name NVARCHAR(100) NOT NULL,
+                    field_value NVARCHAR(MAX),
+                    stage NVARCHAR(50),
+                    collected_at DATETIME DEFAULT GETDATE(),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                )
+            """)
+
         conn.commit()
         conn.close()
 
@@ -522,7 +663,7 @@ def setup_db():
             "status": "success",
             "message": "Database tables created successfully",
             "mode": "local (SQLite)" if is_local_dev() else "Azure SQL",
-            "tables": ["sessions", "messages", "uploads", "summaries", "interview_state"],
+            "tables": ["sessions", "messages", "uploads", "summaries", "interview_state", "collected_data"],
         })
 
     except Exception as e:
@@ -700,6 +841,162 @@ def api_list_uploads():
 
 
 # ===============================
+# Session Data Endpoint
+# Returns all collected structured data for a session (useful for debugging
+# and for populating the summary stage)
+# ===============================
+@app.get("/api/session/<session_id>/data")
+def api_session_data(session_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT field_name, field_value, stage, collected_at "
+            "FROM collected_data WHERE session_id = ? ORDER BY collected_at ASC",
+            (session_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        fields = [
+            {
+                "field_name": row[0],
+                "field_value": row[1],
+                "stage": row[2],
+                "collected_at": str(row[3]),
+            }
+            for row in rows
+        ]
+        # Also return as a flat dict for convenience
+        flat = {row[0]: row[1] for row in rows}
+        return jsonify({"session_id": session_id, "fields": fields, "summary": flat})
+
+    except Exception as e:
+        app.logger.exception("Failed to retrieve session data")
+        return jsonify({"error": f"Failed to retrieve session data: {type(e).__name__}", "details": str(e)}), 500
+
+
+# ===============================
+# Summary Endpoints
+# POST generates a new summary via Azure OpenAI and saves it.
+# GET retrieves the most-recently saved summary.
+# ===============================
+@app.post("/api/session/<session_id>/summary")
+def api_generate_summary(session_id):
+    try:
+        # Require at least some collected data before generating
+        collected = get_collected_data(session_id)
+        if not collected:
+            return jsonify({"error": "No data collected for this session yet"}), 400
+
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+        if not deployment:
+            return jsonify({"error": "Missing AZURE_OPENAI_DEPLOYMENT"}), 500
+
+        client, err = get_client()
+        if err:
+            return jsonify({"error": err}), 500
+
+        # Fetch conversation history for context (most recent 40 messages)
+        history_text = ""
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content FROM messages "
+                "WHERE session_id = ? ORDER BY timestamp ASC",
+                (session_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            history_text = "\n".join(
+                f"{row[0].upper()}: {row[1]}" for row in rows[-40:]
+            )
+        except Exception:
+            app.logger.exception("Failed to load history for summary — continuing without it")
+
+        # Format the collected structured data for the prompt
+        collected_text = "\n".join(
+            f"- {k}: {v}" for k, v in collected.items() if v
+        )
+
+        summary_prompt = (
+            "You are a CPL (Credit for Prior Learning) portfolio writer. "
+            "Based on the structured data and conversation transcript below, "
+            "generate a comprehensive CPL portfolio summary for the student. "
+            "The summary must include:\n"
+            "  1. Student name\n"
+            "  2. Course or competency area they are seeking credit for\n"
+            "  3. Relevant professional or life experience (employer, role, duration)\n"
+            "  4. Skills and knowledge demonstrated, with concrete examples\n"
+            "  5. Evidence provided (documents uploaded or described)\n"
+            "  6. A recommendation statement assessing the strength of their CPL claim\n\n"
+            "Write in a professional, third-person tone suitable for submission to an academic "
+            "review committee. Be thorough but concise.\n\n"
+            f"STRUCTURED DATA COLLECTED:\n{collected_text}\n\n"
+            f"CONVERSATION TRANSCRIPT:\n{history_text}"
+        )
+
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[{"role": "user", "content": summary_prompt}],
+            temperature=0.4,
+        )
+
+        summary_text = (response.choices[0].message.content or "").strip()
+
+        # Save to the summaries table
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO summaries (session_id, summary_text, model_version) VALUES (?, ?, ?)",
+            (session_id, summary_text, deployment),
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "session_id": session_id,
+            "summary": summary_text,
+            "model_version": deployment,
+        })
+
+    except Exception as e:
+        app.logger.exception("Summary generation failed")
+        return jsonify({"error": f"Summary generation failed: {type(e).__name__}", "details": str(e)}), 500
+
+
+@app.get("/api/session/<session_id>/summary")
+def api_get_summary(session_id):
+    """Returns the most recently generated summary for the session."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT summary_text, model_version, created_at FROM summaries "
+            "WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({"error": "No summary found for this session"}), 404
+
+        return jsonify({
+            "session_id": session_id,
+            "summary": row[0],
+            "model_version": row[1],
+            "created_at": str(row[2]),
+        })
+
+    except Exception as e:
+        app.logger.exception("Failed to retrieve summary")
+        return jsonify({"error": f"Failed to retrieve summary: {type(e).__name__}", "details": str(e)}), 500
+
+
+# ===============================
 # Session Endpoint
 # Creates a new session row and returns its ID
 # ===============================
@@ -775,9 +1072,11 @@ def api_chat():
         # Read current stage so we can inform the LLM which part of the interview we're in
         current_stage = get_current_stage(session_id)
 
+        # Load structured data collected in prior turns to inform the system prompt
+        collected = get_collected_data(session_id)
+
         # Build the full messages array: stage-specific system prompt + history + current turn
-        # collected_data will be populated in Piece 5; pass None for now
-        system_prompt = get_system_prompt(current_stage, collected_data=None)
+        system_prompt = get_system_prompt(current_stage, collected_data=collected)
         messages = [
             {"role": "system", "content": system_prompt},
             *history,
@@ -809,6 +1108,9 @@ def api_chat():
         except Exception:
             # Log but don't fail the chat response — message saving is best-effort
             app.logger.exception("Failed to save messages to DB")
+
+        # Extract structured fields from this exchange (separate LLM call, best-effort)
+        extract_fields(session_id, current_stage, user_message, answer)
 
         # Check whether the app should advance to the next interview stage
         # (current_stage was already fetched above before the OpenAI call)

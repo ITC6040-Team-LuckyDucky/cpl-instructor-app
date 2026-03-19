@@ -391,6 +391,8 @@
     }
   }
 
+  const FALLBACK_GREETING = "Hi! I'm your CPL Interview Assistant. I'll guide you through a structured interview to help document your prior learning for academic credit. Let's start — what's your name?";
+
   async function fetchGreeting() {
     if (!sessionId) return;
     showTyping();
@@ -398,9 +400,14 @@
       const res  = await fetch(`/api/chat/greeting?session_id=${encodeURIComponent(sessionId)}`);
       const data = await res.json();
       hideTyping();
-      if (data.greeting) appendMessage("bot", data.greeting);
+      if (res.ok && data.greeting) {
+        appendMessage("bot", data.greeting);
+      } else {
+        appendMessage("bot", FALLBACK_GREETING);
+      }
     } catch (e) {
       hideTyping();
+      appendMessage("bot", FALLBACK_GREETING);
       console.error("Failed to load greeting", e);
     }
   }
@@ -412,8 +419,6 @@
     document.getElementById("summaryText").textContent = "";
     await initSession();
   });
-
-  initSession();
 
   // ─────────────────────────────────────────────
   // Message rendering helpers
@@ -645,6 +650,11 @@
       if (selectedFile) uploadBtn.disabled = false;
     }
   });
+
+  // ─────────────────────────────────────────────
+  // Startup — runs after all functions are defined
+  // ─────────────────────────────────────────────
+  initSession();
 </script>
 </body>
 </html>

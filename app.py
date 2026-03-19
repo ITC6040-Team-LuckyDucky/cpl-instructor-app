@@ -815,10 +815,18 @@ def api_list_uploads():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT upload_id, filename, content_type, size, uploaded_at, blob_url "
-            "FROM uploads ORDER BY uploaded_at DESC"
-        )
+        session_id = (request.args.get("session_id") or "").strip()
+        if session_id:
+            cursor.execute(
+                "SELECT upload_id, filename, content_type, size, uploaded_at, blob_url "
+                "FROM uploads WHERE session_id = ? ORDER BY uploaded_at DESC",
+                (session_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT upload_id, filename, content_type, size, uploaded_at, blob_url "
+                "FROM uploads ORDER BY uploaded_at DESC"
+            )
         rows = cursor.fetchall()
         conn.close()
 

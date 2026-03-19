@@ -607,7 +607,8 @@
   async function loadUploadedFiles() {
     const container = document.getElementById("uploadedFiles");
     try {
-      const res  = await fetch("/api/uploads");
+      const url = sessionId ? `/api/uploads?session_id=${encodeURIComponent(sessionId)}` : "/api/uploads";
+      const res  = await fetch(url);
       const data = await res.json();
       if (!res.ok || !data.uploads || data.uploads.length === 0) { container.innerHTML = ""; return; }
       container.innerHTML = data.uploads.map(u =>

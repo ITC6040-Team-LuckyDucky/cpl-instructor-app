@@ -1028,6 +1028,42 @@ def api_session():
 
 
 # ===============================
+# Greeting Endpoint
+# Returns a canned welcome message and saves it to the messages table
+# so it appears in conversation history. Only fires at the "welcome" stage.
+# ===============================
+GREETING_TEXT = (
+    "Hi! I'm your CPL Interview Assistant. I'll guide you through a structured "
+    "interview to help document your prior learning for academic credit. "
+    "Let's start — what's your name?"
+)
+
+@app.get("/api/chat/greeting")
+def api_chat_greeting():
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+
+    stage = get_current_stage(session_id)
+    if stage != "welcome":
+        return jsonify({"greeting": ""})
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
+            (session_id, "assistant", GREETING_TEXT),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        app.logger.exception("Failed to save greeting message")
+
+    return jsonify({"greeting": GREETING_TEXT})
+
+
+# ===============================
 # Chat API Endpoint
 # Requires session_id; persists user + assistant messages to DB
 # ===============================

@@ -385,17 +385,32 @@
       sessionId = data.session_id;
       document.getElementById("sessionLabel").textContent = sessionId.slice(0, 8) + "…";
       updateStageUI(data.stage || "welcome");
+      await fetchGreeting();
     } catch (e) {
       console.error("Network error starting session", e);
     }
   }
 
+  async function fetchGreeting() {
+    if (!sessionId) return;
+    showTyping();
+    try {
+      const res  = await fetch(`/api/chat/greeting?session_id=${encodeURIComponent(sessionId)}`);
+      const data = await res.json();
+      hideTyping();
+      if (data.greeting) appendMessage("bot", data.greeting);
+    } catch (e) {
+      hideTyping();
+      console.error("Failed to load greeting", e);
+    }
+  }
+
   document.getElementById("newSessionBtn").addEventListener("click", async () => {
-    await initSession();
     document.getElementById("chatInner").innerHTML = "";
     document.getElementById("msgInput").value = "";
     document.getElementById("summaryCard").style.display = "none";
     document.getElementById("summaryText").textContent = "";
+    await initSession();
   });
 
   initSession();

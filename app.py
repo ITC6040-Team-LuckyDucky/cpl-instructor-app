@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from openai import AzureOpenAI
@@ -188,8 +189,12 @@ def get_system_prompt(stage, collected_data=None):
     prompts = {
         "welcome": (
             "You are a CPL (Credit for Prior Learning) interview assistant. "
-            "Your only goal right now is to learn the student's name — nothing else. "
-            "Ask for their name in one short, friendly sentence. "
+            "Follow this exact sequence, one question per response, and ALWAYS follow up — never stop at a greeting. "
+            "Step 1: Ask for the student's name. "
+            "Step 2: After they give their name, say a brief greeting and ask: 'Are you a current Northeastern University student?' (if yes, ask for their NUID). "
+            "Step 3: After they answer, ask: 'What is your major or intended major?' "
+            "Step 4: After they answer, ask exactly this: 'How can I help you today? A: I'd like to waive a course based on my prior experience. B: I'd like to check if my experience qualifies me for a specific course. C: I have other questions about CPL.' "
+            "You must always move to the next step immediately. Never stop after a greeting. "
             f"{STYLE}"
         ),
         "course_id": (
@@ -285,8 +290,9 @@ def should_advance(current_stage, user_message, assistant_response):
     words = msg.split()
 
     if current_stage == "welcome":
-        # Advance when the user has given a substantive reply (likely includes their name)
-        return len(words) >= 2
+        # Advance only when the student picks an option (A, B, or C) from the final menu
+        return bool(re.search(r'\b(option\s*)?[abc]\b', msg) or
+                    re.search(r'\b(waive|waiver|qualify|qualifies|other questions?)\b', msg))
 
     if current_stage == "course_id":
         # Advance when the user mentions a course, subject, or programme

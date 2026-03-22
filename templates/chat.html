@@ -179,21 +179,42 @@
       padding: 14px 16px;
       margin-bottom: 10px;
     }
-    .summary-card h4 { color: #2e7d32; font-size: 14px; margin-bottom: 8px; }
+    .summary-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .summary-card-header h4 { color: #2e7d32; font-size: 14px; }
+    .summary-card-actions { display: flex; gap: 6px; align-items: center; }
     .summary-body {
       white-space: pre-wrap;
       font-size: 13px;
       line-height: 1.6;
       color: #333;
-      max-height: 260px;
-      overflow-y: auto;
+      overflow: hidden;
     }
-    .regen-btn {
+    .summary-body.collapsed {
+      /* clamp to ~3 lines */
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .summary-footer {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .regen-btn, .toggle-btn, .download-btn {
       background: none; border: 1px solid #4CAF50; color: #2e7d32;
       border-radius: 6px; padding: 4px 12px; font-size: 12px;
-      cursor: pointer; margin-top: 8px;
+      cursor: pointer;
     }
-    .regen-btn:hover { background: #e8f5e9; }
+    .regen-btn:hover, .toggle-btn:hover, .download-btn:hover { background: #e8f5e9; }
     .regen-btn:disabled { opacity: .5; cursor: not-allowed; }
 
     /* Input bar */
@@ -322,9 +343,17 @@
 
     <!-- Summary card (appears after generation) -->
     <div class="summary-card" id="summaryCard">
-      <h4>CPL Portfolio Summary</h4>
-      <div class="summary-body" id="summaryText"></div>
-      <button class="regen-btn" id="regenSummaryBtn">Regenerate</button>
+      <div class="summary-card-header">
+        <h4>CPL Portfolio Summary</h4>
+        <div class="summary-card-actions">
+          <button class="download-btn" id="downloadSummaryBtn" title="Download as text file">Download</button>
+        </div>
+      </div>
+      <div class="summary-body collapsed" id="summaryText"></div>
+      <div class="summary-footer">
+        <button class="toggle-btn" id="toggleSummaryBtn">Show Full Summary</button>
+        <button class="regen-btn" id="regenSummaryBtn">Regenerate</button>
+      </div>
     </div>
 
     <!-- Input row -->
@@ -417,6 +446,8 @@
     document.getElementById("msgInput").value = "";
     document.getElementById("summaryCard").style.display = "none";
     document.getElementById("summaryText").textContent = "";
+    document.getElementById("summaryText").classList.add("collapsed");
+    document.getElementById("toggleSummaryBtn").textContent = "Show Full Summary";
     await initSession();
   });
 
@@ -524,9 +555,10 @@
     if (!sessionId) return;
     const card    = document.getElementById("summaryCard");
     const bodyEl  = document.getElementById("summaryText");
+    const toggleBtn = document.getElementById("toggleSummaryBtn");
 
-    btn.disabled     = true;
-    btn.textContent  = "Generating…";
+    btn.disabled    = true;
+    btn.textContent = "Generating…";
 
     try {
       const res  = await fetch(`/api/session/${sessionId}/summary`, { method: "POST" });
@@ -535,8 +567,11 @@
         alert("Summary failed: " + (data.error || "Unknown error"));
         return;
       }
-      bodyEl.textContent   = data.summary;
-      card.style.display   = "block";
+      bodyEl.textContent = data.summary;
+      // Always start collapsed after (re)generating
+      bodyEl.classList.add("collapsed");
+      toggleBtn.textContent = "Show Full Summary";
+      card.style.display = "block";
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } catch (e) {
       alert("Network error generating summary.");
@@ -548,6 +583,25 @@
 
   document.getElementById("generateSummaryBtn").addEventListener("click", (e) => doGenerateSummary(e.currentTarget));
   document.getElementById("regenSummaryBtn").addEventListener("click",    (e) => doGenerateSummary(e.currentTarget));
+
+  document.getElementById("toggleSummaryBtn").addEventListener("click", () => {
+    const bodyEl    = document.getElementById("summaryText");
+    const toggleBtn = document.getElementById("toggleSummaryBtn");
+    const collapsed = bodyEl.classList.toggle("collapsed");
+    toggleBtn.textContent = collapsed ? "Show Full Summary" : "Hide Summary";
+  });
+
+  document.getElementById("downloadSummaryBtn").addEventListener("click", () => {
+    const text = document.getElementById("summaryText").textContent;
+    if (!text) return;
+    const blob = new Blob([text], { type: "text/plain" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `cpl-summary-${sessionId ? sessionId.slice(0, 8) : "export"}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
   // ─────────────────────────────────────────────
   // Upload drawer toggle

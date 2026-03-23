@@ -206,10 +206,15 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
         ),
         "experience": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
-            "Ask ONE question about their most relevant hands-on experience related to that course — "
-            "focus on what they actually did, not general background. "
-            "Do not ask about skills or evidence yet. "
-            f"{STYLE}"
+            + (
+                "The student has uploaded documents that may describe their background. "
+                "Use those documents to ask a more specific and informed question about their hands-on experience. "
+                if document_context else
+                "Ask ONE question about their most relevant hands-on experience related to that course — "
+                "focus on what they actually did, not general background. "
+            )
+            + "Do not ask about skills or evidence yet. "
+            + f"{STYLE}"
         ),
         "skills_reflection": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
@@ -1082,6 +1087,37 @@ GREETING_TEXT = (
     "interview to help document your prior learning for academic credit. "
     "Let's start — what's your name?"
 )
+
+@app.get("/api/debug/uploads")
+def api_debug_uploads():
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT filename, content_type, size, uploaded_at, "
+            "CASE WHEN extracted_text IS NULL THEN 'NULL' "
+            "WHEN extracted_text = '' THEN 'EMPTY' "
+            "ELSE CAST(LEN(extracted_text) AS NVARCHAR) + ' chars' END AS text_status "
+            "FROM uploads WHERE session_id = ? ORDER BY uploaded_at DESC",
+            (session_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return jsonify({
+            "session_id": session_id,
+            "upload_count": len(rows),
+            "uploads": [
+                {"filename": r[0], "content_type": r[1], "size": r[2], "uploaded_at": str(r[3]), "extracted_text": r[4]}
+                for r in rows
+            ],
+        })
+    except Exception as e:
+        app.logger.exception("Debug uploads failed")
+        return jsonify({"error": str(e)}), 500
+
 
 @app.get("/api/chat/greeting")
 def api_chat_greeting():

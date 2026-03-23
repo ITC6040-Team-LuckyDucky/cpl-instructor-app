@@ -1088,6 +1088,7 @@ GREETING_TEXT = (
     "Let's start — what's your name?"
 )
 
+#Remove after testing
 @app.get("/api/debug/uploads")
 def api_debug_uploads():
     session_id = (request.args.get("session_id") or "").strip()
@@ -1198,9 +1199,9 @@ def api_chat():
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT filename, extracted_text FROM uploads "
+                "SELECT TOP 3 filename, extracted_text FROM uploads "
                 "WHERE session_id = ? AND extracted_text IS NOT NULL "
-                "ORDER BY uploaded_at DESC LIMIT 3",
+                "ORDER BY uploaded_at DESC",
                 (session_id,),
             )
             doc_context = cursor.fetchall()

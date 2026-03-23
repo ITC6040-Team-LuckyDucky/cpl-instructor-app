@@ -206,24 +206,36 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
         ),
         "experience": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
+            "Your goal is to find out whether this student has real hands-on experience with what {course} teaches — not their general background. "
             + (
-                "The student has uploaded documents that may describe their background. "
-                "Use those documents to ask a more specific and informed question about their hands-on experience. "
+                f"The student has uploaded documents describing their background. "
+                f"Pick ONE specific topic or skill that {course} covers, find the most relevant role or project in their documents, "
+                f"and ask ONE question like: 'For {course}, a key area is [topic]. Based on your work at [place from their documents], "
+                f"can you walk me through a specific time you applied [topic]?' "
+                "Tie the question directly to the course — do not ask a generic resume question. "
                 if document_context else
-                "Ask ONE question about their most relevant hands-on experience related to that course — "
-                "focus on what they actually did, not general background. "
+                f"Ask ONE question about a specific situation where they applied something that {course} teaches — "
+                "focus on what they actually did, not their job title or general background. "
             )
-            + "Do not ask about skills or evidence yet. "
+            + "Ask only ONE question. Do not ask about skills or evidence yet. "
             + f"{STYLE}"
         ),
         "skills_reflection": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
             f"They described their experience as: {experience_summary}. "
-            "This is the most critical stage — you need to determine whether the student already "
-            "has the knowledge and skills that this course teaches. "
-            "Ask for ONE specific example that proves they already know the course material. "
-            "Do not ask about evidence or move to other topics. "
-            f"{STYLE}"
+            "This is the most critical stage — your job is to determine whether the student already has the knowledge and skills that "
+            f"{course} teaches, not to quiz them or conduct a job interview. "
+            + (
+                f"Use their uploaded documents to identify a specific concept or skill covered in {course} that appears in their background, "
+                "then ask ONE focused question like: 'Can you give me a concrete example of how you used [that concept] in your work — "
+                "what was the situation, what did you do, and what was the outcome?' "
+                "The question must be tied to the course content, not just their resume. "
+                if document_context else
+                f"Ask for ONE concrete example that shows they already understand something specific that {course} covers. "
+                "Frame it around the course content, not general job experience. "
+            )
+            + "Ask only ONE question. Do not ask about evidence or move to other topics. "
+            + f"{STYLE}"
         ),
         "evidence": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "

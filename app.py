@@ -168,11 +168,12 @@ STAGE_FIELDS = {
 }
 
 
-def get_system_prompt(stage, collected_data=None):
+def get_system_prompt(stage, collected_data=None, document_context=None):
     """
     Returns a stage-specific system prompt that constrains the bot to the
     current interview topic. collected_data is a dict with keys like
     'name', 'course', 'experience_summary' populated by prior stages.
+    document_context is a list of (filename, extracted_text) tuples from uploaded files.
     """
     d = collected_data or {}
     name = d.get("student_name") or "the student"
@@ -221,9 +222,15 @@ def get_system_prompt(stage, collected_data=None):
         ),
         "evidence": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
-            "Ask if they have any documents that prove their experience, such as certificates, "
-            "work samples, or letters. They can upload files using the button in the chat. "
-            f"{STYLE}"
+            + (
+                "The student has already uploaded the following files: "
+                + ", ".join(fn for fn, _ in document_context)
+                + ". Acknowledge these uploads and ask if they have any additional evidence to share. "
+                if document_context else
+                "Ask if they have any documents that prove their experience, such as certificates, "
+                "work samples, or letters. They can upload files using the button in the chat. "
+            )
+            + f"{STYLE}"
         ),
         "summary": (
             f"You are a CPL interview assistant. The interview with {name} is complete. "
@@ -233,7 +240,25 @@ def get_system_prompt(stage, collected_data=None):
         ),
     }
 
-    return prompts.get(stage, prompts["welcome"])
+    prompt = prompts.get(stage, prompts["welcome"])
+
+    if document_context:
+        doc_sections = []
+        for filename, text in document_context:
+            body = text.strip()
+            if len(body) > 3000:
+                body = body[:3000] + "... (truncated)"
+            doc_sections.append(f"--- Document: {filename} ---\n{body}")
+        doc_sections = "\n\n".join(doc_sections)
+        prompt += (
+            "\n\nThe student has uploaded the following documents. "
+            "Use this information to ask more informed questions and reference specific details "
+            "from their documents when relevant. "
+            "Do not make up information that is not in the documents.\n\n"
+            + doc_sections
+        )
+
+    return prompt
 
 
 def get_current_stage(session_id):
@@ -1131,8 +1156,26 @@ def api_chat():
         # Load structured data collected in prior turns to inform the system prompt
         collected = get_collected_data(session_id)
 
+        # Load extracted text from any documents the student uploaded this session
+        doc_context = []
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT filename, extracted_text FROM uploads "
+                "WHERE session_id = ? AND extracted_text IS NOT NULL "
+                "ORDER BY uploaded_at DESC LIMIT 3",
+                (session_id,),
+            )
+            doc_context = cursor.fetchall()
+            conn.close()
+        except Exception:
+            app.logger.exception("Failed to load uploaded document text")
+
         # Build the full messages array: stage-specific system prompt + history + current turn
-        system_prompt = get_system_prompt(current_stage, collected_data=collected)
+        system_prompt = get_system_prompt(
+            current_stage, collected_data=collected, document_context=doc_context or None
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             *history,

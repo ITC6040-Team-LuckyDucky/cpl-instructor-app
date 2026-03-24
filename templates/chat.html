@@ -187,6 +187,14 @@
     }
     .summary-card-header h4 { color: #2e7d32; font-size: 14px; }
     .summary-card-actions { display: flex; gap: 6px; align-items: center; }
+    .summary-collapse-btn {
+      background: none; border: none;
+      color: #2e7d32; font-size: 13px;
+      cursor: pointer; padding: 2px 6px;
+      border-radius: 4px; line-height: 1;
+    }
+    .summary-collapse-btn:hover { background: #c8e6c9; }
+    .summary-body.expanded { max-height: 280px; overflow-y: auto; }
     .summary-body {
       white-space: pre-wrap;
       font-size: 13px;
@@ -383,6 +391,7 @@
         <h4>CPL Portfolio Summary</h4>
         <div class="summary-card-actions">
           <button class="download-btn" id="downloadSummaryBtn" title="Download as text file">Download</button>
+          <button class="summary-collapse-btn" id="summaryCollapseBtn" title="Collapse summary">▲ Hide</button>
         </div>
       </div>
       <div class="summary-body collapsed" id="summaryText"></div>
@@ -618,6 +627,7 @@
       }
       bodyEl.textContent = data.summary;
       bodyEl.classList.add("collapsed");
+      bodyEl.classList.remove("expanded");
       toggleBtn.textContent = "Show Full Summary";
       card.style.display = "block";
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -632,12 +642,28 @@
   document.getElementById("generateSummaryBtn").addEventListener("click", (e) => doGenerateSummary(e.currentTarget));
   document.getElementById("regenSummaryBtn").addEventListener("click",    (e) => doGenerateSummary(e.currentTarget));
 
+  function collapseSummary() {
+    const bodyEl    = document.getElementById("summaryText");
+    const toggleBtn = document.getElementById("toggleSummaryBtn");
+    bodyEl.classList.add("collapsed");
+    bodyEl.classList.remove("expanded");
+    toggleBtn.textContent = "Show Full Summary";
+  }
+
   document.getElementById("toggleSummaryBtn").addEventListener("click", () => {
     const bodyEl    = document.getElementById("summaryText");
     const toggleBtn = document.getElementById("toggleSummaryBtn");
-    const collapsed = bodyEl.classList.toggle("collapsed");
-    toggleBtn.textContent = collapsed ? "Show Full Summary" : "Hide Summary";
+    const isCollapsed = bodyEl.classList.contains("collapsed");
+    if (isCollapsed) {
+      bodyEl.classList.remove("collapsed");
+      bodyEl.classList.add("expanded");
+      toggleBtn.textContent = "Hide Summary";
+    } else {
+      collapseSummary();
+    }
   });
+
+  document.getElementById("summaryCollapseBtn").addEventListener("click", collapseSummary);
 
   document.getElementById("downloadSummaryBtn").addEventListener("click", () => {
     const text = document.getElementById("summaryText").textContent;

@@ -184,7 +184,13 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
         "Keep your response under 3 sentences. "
         "Ask only ONE question. "
         "Do not use bullet points, numbered lists, or markdown formatting. "
-        "Speak naturally like a friendly interviewer."
+        "Speak naturally like a friendly interviewer. "
+        "CRITICAL: Every response must end with either a question for the student or a clear transition to the next topic. "
+        "Never end with a statement that leaves the student with nothing to respond to. "
+        "If you have enough information for this stage, briefly acknowledge and immediately ask the question that moves to the next topic. "
+        "Do not evaluate, encourage, or comment on how well the student is doing. "
+        "Never say things like 'great answer', 'that's impressive', 'this could support your application', or any variation of praise or judgment. "
+        "Stay completely neutral — your only job is to collect information."
     )
 
     prompts = {

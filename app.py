@@ -190,11 +190,18 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
         "If you have enough information for this stage, briefly acknowledge and immediately ask the question that moves to the next topic. "
         "Do not evaluate, encourage, or comment on how well the student is doing. "
         "Never say things like 'great answer', 'that's impressive', 'this could support your application', or any variation of praise or judgment. "
-        "Stay completely neutral — your only job is to collect information."
+        "Stay completely neutral — your only job is to collect information. "
+        "CRITICAL: Never say goodbye, wish the student luck, or act as if the conversation is over. "
+        "The interview has a fixed 6-stage structure and the app controls when it ends — do NOT try to end or close the conversation yourself. "
+        "CRITICAL: Do NOT ask about topics that belong to other stages. Stay strictly on the topic of your current stage. "
+        "If the student goes off-topic or asks about something else, redirect them back to your current stage's question. "
+        "Never offer to 'help with anything else', never say 'feel free to reach out', and never suggest the session is wrapping up."
     )
 
     prompts = {
         "welcome": (
+            "You are in Stage 1 of 6: Welcome. "
+            "The app will automatically move to the next stage when ready — do NOT try to transition the conversation yourself. "
             "You are a CPL (Credit for Prior Learning) interview assistant. Your job is to collect information — not to evaluate, encourage, or comment on what the student shares. "
             "Follow this exact sequence, one question per response, with no added commentary between steps. "
             "Step 1: Ask for the student's name. "
@@ -209,6 +216,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             f"{STYLE}"
         ),
         "course_id": (
+            "You are in Stage 2 of 6: Course Identification. "
+            "The app will automatically move to the next stage when ready — do NOT try to transition the conversation yourself. "
             f"You are a CPL interview assistant. The student's name is {name}. "
             "Ask them which course or competency area they want to receive credit for. "
             "Do not comment on, evaluate, or react to their answer — just acknowledge it neutrally and move on. "
@@ -216,6 +225,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             f"{STYLE}"
         ),
         "experience": (
+            "You are in Stage 3 of 6: Experience. "
+            "The app will automatically move to the next stage when ready — do NOT try to transition the conversation yourself. "
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
             f"Your goal is to get a brief picture of the student's hands-on experience relevant to {course} — where they worked, what they did, and roughly how long. "
             "Once the student has described what they did and where, that is enough. "
@@ -236,6 +247,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             + f"{STYLE}"
         ),
         "skills_reflection": (
+            "You are in Stage 4 of 6: Skills Reflection. "
+            "The app will automatically move to the next stage when ready — do NOT try to transition the conversation yourself. "
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
             f"They described their experience as: {experience_summary}. "
             "This is the most critical stage — your job is to determine whether the student already has the knowledge and skills that "
@@ -253,6 +266,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             + f"{STYLE}"
         ),
         "evidence": (
+            "You are in Stage 5 of 6: Evidence Collection. "
+            "The app will automatically move to the next stage when ready — do NOT try to transition the conversation yourself. "
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
             "Your job here is only to ask what documents the student can provide — do not review, evaluate, or comment on what they have shared so far. "
             + (
@@ -266,6 +281,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             + f"{STYLE}"
         ),
         "summary": (
+            "You are in Stage 6 of 6: Summary. This is the final stage. "
+            "Do NOT say goodbye, close the conversation, or suggest the interview is over — the app handles that. "
             f"You are a CPL interview assistant. The interview with {name} is now complete. "
             f"Neutrally restate what was collected: the course they are seeking credit for ({course}), "
             "the experience they described, the specific example they gave, and any documents they uploaded. "
@@ -1144,35 +1161,36 @@ GREETING_TEXT = (
     "Let's start — what's your name?"
 )
 
-#Remove after testing
-@app.get("/api/debug/uploads")
-def api_debug_uploads():
-    session_id = (request.args.get("session_id") or "").strip()
-    if not session_id:
-        return jsonify({"error": "session_id is required"}), 400
+@app.get("/api/session/<session_id>/stage")
+def api_session_stage(session_id):
+    """Debug endpoint: returns the current stage, message count, and last 3 messages for a session."""
     try:
+        stage = get_current_stage(session_id)
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT filename, content_type, size, uploaded_at, "
-            "CASE WHEN extracted_text IS NULL THEN 'NULL' "
-            "WHEN extracted_text = '' THEN 'EMPTY' "
-            "ELSE CAST(LEN(extracted_text) AS NVARCHAR) + ' chars' END AS text_status "
-            "FROM uploads WHERE session_id = ? ORDER BY uploaded_at DESC",
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
             (session_id,),
         )
-        rows = cursor.fetchall()
+        msg_count = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT TOP 3 role, content, timestamp FROM messages "
+            "WHERE session_id = ? ORDER BY timestamp DESC",
+            (session_id,),
+        )
+        last_msgs = cursor.fetchall()
         conn.close()
         return jsonify({
             "session_id": session_id,
-            "upload_count": len(rows),
-            "uploads": [
-                {"filename": r[0], "content_type": r[1], "size": r[2], "uploaded_at": str(r[3]), "extracted_text": r[4]}
-                for r in rows
+            "current_stage": stage,
+            "message_count": msg_count,
+            "last_3_messages": [
+                {"role": r[0], "content": (r[1] or "")[:300], "timestamp": str(r[2])}
+                for r in last_msgs
             ],
         })
     except Exception as e:
-        app.logger.exception("Debug uploads failed")
+        app.logger.exception("Stage debug failed")
         return jsonify({"error": str(e)}), 500
 
 

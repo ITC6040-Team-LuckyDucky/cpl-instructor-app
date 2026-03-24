@@ -194,9 +194,10 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             "Step 1: Ask for the student's name. "
             "Step 2: After they give their name, say a brief greeting and ask: 'Are you a current Northeastern University student?' (if yes, ask for their NUID). "
             "Step 3: After they answer, ask: 'What is your major or intended major?' "
-            "Step 4: After they answer, ask exactly this: 'How can I help you today? "
-            "A: I'd like to waive a course based on my prior experience. "
-            "B: I'd like to check if my experience qualifies me for a specific course. "
+            "Step 4: After they answer, ask exactly this (each option on its own line):\n"
+            "'How can I help you today?\n"
+            "A: I'd like to waive a course based on my prior experience.\n"
+            "B: I'd like to check if my experience qualifies me for a specific course.\n"
             "C: I have other questions about CPL.' "
             "Never add remarks like 'great' or 'sounds good' between steps. Move to the next step immediately. "
             f"{STYLE}"
@@ -356,28 +357,10 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
         ]
         return any(kw in msg for kw in course_keywords) or len(words) >= 4
 
-    if current_stage == "experience":
-        experience_keywords = [
-            # job/role
-            "worked", "work", "working", "job", "role", "position", "internship",
-            "manager", "engineer", "developer", "analyst", "designer", "nurse",
-            "teacher", "director", "intern", "freelance", "contractor",
-            # place/org
-            "company", "organization", "startup", "firm", "agency", "school",
-            "university", "hospital", "lab", "team", "department",
-            # duration
-            "years", "months", "weeks", "year", "month",
-            # what they did
-            "built", "created", "developed", "designed", "implemented", "used",
-            "wrote", "managed", "led", "ran", "deployed", "maintained",
-            "project", "system", "app", "application", "tool", "software",
-            "database", "api", "algorithm", "model", "data",
-            # common filler that still signals a real answer
-            "employed", "experience", "background",
-        ]
-        if any(kw in msg for kw in experience_keywords):
-            return True
-        # Fallback: advance after 2+ user turns in this stage regardless of keywords
+    def user_turns_in_stage(min_turns):
+        """Returns True if the student has sent >= min_turns messages in this session."""
+        if not session_id:
+            return False
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -385,32 +368,44 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
                 "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
                 (session_id,),
             )
-            total_user_turns = cursor.fetchone()[0]
+            count = cursor.fetchone()[0]
             conn.close()
-            # welcome stage uses ~4 turns; experience starts around turn 5+
-            # advance if the student has sent at least 2 messages since experience began
-            stage_turn_estimate = total_user_turns - 4
-            return stage_turn_estimate >= 2
+            return count >= min_turns
         except Exception:
-            pass
-        return False
+            return False
+
+    if current_stage == "experience":
+        experience_keywords = [
+            "worked", "work", "working", "job", "role", "position", "internship",
+            "manager", "engineer", "developer", "analyst", "designer", "nurse",
+            "teacher", "director", "intern", "freelance", "contractor",
+            "company", "organization", "startup", "firm", "agency", "school",
+            "university", "hospital", "lab", "team", "department",
+            "years", "months", "weeks", "year", "month",
+            "built", "created", "developed", "designed", "implemented", "used",
+            "wrote", "managed", "led", "ran", "deployed", "maintained",
+            "project", "system", "app", "application", "tool", "software",
+            "database", "api", "algorithm", "model", "data",
+            "employed", "experience", "background",
+        ]
+        return any(kw in msg for kw in experience_keywords) or user_turns_in_stage(7)
 
     if current_stage == "skills_reflection":
-        # Advance when the user gives a concrete example or description
         reflection_keywords = [
             "example", "instance", "specifically", "when i", "i did",
             "i used", "i learned", "i managed", "i built", "i created",
             "i led", "responsible", "skill", "knowledge", "ability",
         ]
-        return any(kw in msg for kw in reflection_keywords) or len(words) >= 15
+        return any(kw in msg for kw in reflection_keywords) or len(words) >= 15 or user_turns_in_stage(10)
 
     if current_stage == "evidence":
-        # Advance when the user indicates they have provided or have no more evidence
         evidence_keywords = [
             "uploaded", "attached", "no more", "that's all", "done",
             "no evidence", "nothing else", "finished", "complete",
+            "no", "nope", "nah", "nothing", "none", "i'm good", "im good",
+            "that's it", "thats it", "all done", "not right now", "i just did",
         ]
-        return any(kw in msg for kw in evidence_keywords)
+        return any(kw in msg for kw in evidence_keywords) or user_turns_in_stage(13)
 
     # "summary" is the final stage — never advance
     return False

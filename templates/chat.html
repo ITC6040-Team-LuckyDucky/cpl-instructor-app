@@ -546,15 +546,13 @@
   const msgInput = document.getElementById("msgInput");
   const sendBtn  = document.getElementById("sendBtn");
 
-  async function sendMessage() {
-    const msg = msgInput.value.trim();
-    if (!msg) return;
+  // Core chat API call — accepts an explicit message string
+  async function sendChatMessage(msg) {
     if (!sessionId) {
       appendMessage("bot", "No active session — please wait or click + New Session.");
       return;
     }
 
-    msgInput.value   = "";
     msgInput.disabled = true;
     sendBtn.disabled  = true;
 
@@ -584,6 +582,14 @@
       sendBtn.disabled  = false;
       msgInput.focus();
     }
+  }
+
+  // Send button / Enter key — reads from the input field
+  async function sendMessage() {
+    const msg = msgInput.value.trim();
+    if (!msg) return;
+    msgInput.value = "";
+    await sendChatMessage(msg);
   }
 
   sendBtn.addEventListener("click", sendMessage);
@@ -773,8 +779,9 @@
         filePreviewUploadBtn.textContent = "Upload";
       } else {
         clearSelectedFile();
-        appendMessage("bot", `📎 ${filename} uploaded`);
         loadUploadedFiles();
+        // Auto-send a chat message so the bot acknowledges the upload
+        await sendChatMessage(`I just uploaded ${filename}.`);
       }
     } catch (e) {
       alert("Network error during upload.");

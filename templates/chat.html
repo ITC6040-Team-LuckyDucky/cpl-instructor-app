@@ -224,6 +224,40 @@
     .regen-btn:hover, .toggle-btn:hover, .download-btn:hover { background: #e8f5e9; }
     .regen-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+    /* Summary version + timestamp meta line */
+    .summary-meta {
+      font-size: 11px;
+      color: #81c784;
+      margin-top: 2px;
+    }
+
+    /* "Summary updated" toast */
+    .summary-toast {
+      position: fixed;
+      bottom: 80px;
+      right: 24px;
+      background: #2e7d32;
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 2px 10px rgba(0,0,0,.2);
+      opacity: 1;
+      transition: opacity .5s ease;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .summary-toast.fade-out { opacity: 0; }
+
+    /* Pulse glow on summary card after update */
+    @keyframes summary-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(76,175,80,.7); }
+      50%  { box-shadow: 0 0 0 10px rgba(76,175,80,.15); }
+      100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); }
+    }
+    .summary-card.pulse { animation: summary-pulse .9s ease-out; }
+
     /* ── File preview card ── */
     .file-preview-card {
       display: flex;
@@ -388,7 +422,10 @@
     <!-- Summary card (appears after generation) -->
     <div class="summary-card" id="summaryCard">
       <div class="summary-card-header">
-        <h4>CPL Portfolio Summary</h4>
+        <div>
+          <h4>CPL Portfolio Summary</h4>
+          <div class="summary-meta" id="summaryMeta"></div>
+        </div>
         <div class="summary-card-actions">
           <button class="download-btn" id="downloadSummaryBtn" title="Download as text file">Download</button>
           <button class="summary-collapse-btn" id="summaryCollapseBtn" title="Collapse summary">▲ Hide</button>
@@ -501,6 +538,8 @@
     document.getElementById("summaryText").textContent = "";
     document.getElementById("summaryText").classList.add("collapsed");
     document.getElementById("toggleSummaryBtn").textContent = "Show Full Summary";
+    document.getElementById("summaryMeta").textContent = "";
+    summaryVersion = 0;
     clearSelectedFile();
     await initSession();
   });
@@ -609,6 +648,40 @@
   });
 
   // ─────────────────────────────────────────────
+  // Summary version tracking + feedback helpers
+  // ─────────────────────────────────────────────
+  let summaryVersion = 0;
+
+  function showSummaryToast() {
+    const existing = document.getElementById("summaryToast");
+    if (existing) existing.remove();
+    const toast = document.createElement("div");
+    toast.id = "summaryToast";
+    toast.className = "summary-toast";
+    toast.textContent = summaryVersion === 1 ? "✓ Summary ready" : "✓ Summary updated";
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add("fade-out");
+      setTimeout(() => toast.remove(), 500);
+    }, 2500);
+  }
+
+  function updateSummaryMeta() {
+    summaryVersion++;
+    const metaEl = document.getElementById("summaryMeta");
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    metaEl.textContent = `Version ${summaryVersion} · Last updated: ${now}`;
+  }
+
+  function pulseSummaryCard() {
+    const card = document.getElementById("summaryCard");
+    card.classList.remove("pulse");
+    void card.offsetWidth; // force reflow to restart animation
+    card.classList.add("pulse");
+    card.addEventListener("animationend", () => card.classList.remove("pulse"), { once: true });
+  }
+
+  // ─────────────────────────────────────────────
   // Summary generation
   // ─────────────────────────────────────────────
   async function doGenerateSummary(btn) {
@@ -632,6 +705,9 @@
       bodyEl.classList.remove("expanded");
       toggleBtn.textContent = "Show Full Summary";
       card.style.display = "block";
+      updateSummaryMeta();
+      pulseSummaryCard();
+      showSummaryToast();
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } catch (e) {
       alert("Network error generating summary.");
@@ -796,7 +872,7 @@
     formData.append("session_id", sessionId);
 
     filePreviewUploadBtn.disabled    = true;
-    filePreviewUploadBtn.textContent = "Uploading…";
+    filePreviewUploadBtn.textContent = "Upload";
 
     try {
       const res  = await fetch("/api/upload", { method: "POST", body: formData });
@@ -824,6 +900,9 @@
               bodyEl.classList.remove("expanded");
               toggleBtn.textContent = "Show Full Summary";
               card.style.display = "block";
+              updateSummaryMeta();
+              pulseSummaryCard();
+              showSummaryToast();
             } else {
               appendMessage("bot", "Note: summary could not be updated automatically. Use the Regenerate button.");
             }

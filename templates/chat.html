@@ -195,7 +195,6 @@
       overflow: hidden;
     }
     .summary-body.collapsed {
-      /* clamp to ~3 lines */
       display: -webkit-box;
       -webkit-line-clamp: 3;
       line-clamp: 3;
@@ -216,6 +215,54 @@
     }
     .regen-btn:hover, .toggle-btn:hover, .download-btn:hover { background: #e8f5e9; }
     .regen-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── File preview card ── */
+    .file-preview-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.07);
+    }
+    .file-type-badge {
+      width: 40px; height: 40px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .file-type-badge.pdf  { background: #fde8e8; color: #c62828; }
+    .file-type-badge.doc,
+    .file-type-badge.docx { background: #e3f2fd; color: #1565c0; }
+    .file-type-badge.txt  { background: #f5f5f5; color: #616161; }
+    .file-type-badge.other { background: #f3e5f5; color: #6a1b9a; }
+    .file-preview-info { flex: 1; min-width: 0; }
+    .file-preview-name {
+      font-size: 13px; font-weight: 500; color: #1a1a1a;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-preview-size { font-size: 11px; color: #999; margin-top: 2px; }
+    .file-preview-upload-btn {
+      background: #1976d2; color: #fff;
+      border: none; border-radius: 8px;
+      padding: 6px 16px; font-size: 13px; font-weight: 500;
+      cursor: pointer; flex-shrink: 0;
+      transition: background .15s;
+    }
+    .file-preview-upload-btn:hover { background: #1565c0; }
+    .file-preview-upload-btn:disabled { background: #ccc; cursor: not-allowed; }
+    .file-preview-remove-btn {
+      background: none; border: none;
+      color: #aaa; font-size: 18px; line-height: 1;
+      cursor: pointer; padding: 4px 6px;
+      border-radius: 50%; flex-shrink: 0;
+      transition: background .15s, color .15s;
+    }
+    .file-preview-remove-btn:hover { background: #f5f5f5; color: #555; }
 
     /* Input bar */
     .input-row {
@@ -252,7 +299,7 @@
     .send-btn:hover { background: #1565c0; }
     .send-btn:disabled { background: #ccc; cursor: not-allowed; }
 
-    /* Upload drawer */
+    /* Upload drawer (drag/drop only) */
     .upload-drawer {
       display: none;
       margin-top: 10px;
@@ -272,19 +319,8 @@
     }
     .drop-zone.dragover { border-color: #4CAF50; background: #e8f5e9; }
     .drop-zone label { color: #1976d2; cursor: pointer; }
-    .upload-actions {
-      display: flex; align-items: center; gap: 10px; margin-top: 8px;
-    }
-    .upload-file-label { font-size: 12px; color: #555; flex: 1; }
-    .upload-submit-btn {
-      background: #4CAF50; color: #fff;
-      border: none; border-radius: 6px;
-      padding: 6px 14px; font-size: 13px; cursor: pointer;
-    }
-    .upload-submit-btn:hover { background: #43a047; }
-    .upload-submit-btn:disabled { background: #ccc; cursor: not-allowed; }
 
-    /* File chips */
+    /* File chips (uploaded files list) */
     .file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .chip {
       display: flex; align-items: center; gap: 5px;
@@ -356,9 +392,21 @@
       </div>
     </div>
 
+    <!-- File preview card (appears when a file is selected) -->
+    <div class="file-preview-card" id="filePreviewCard" style="display:none">
+      <div class="file-type-badge other" id="fileTypeBadge">FILE</div>
+      <div class="file-preview-info">
+        <div class="file-preview-name" id="filePreviewName"></div>
+        <div class="file-preview-size" id="filePreviewSize"></div>
+      </div>
+      <button class="file-preview-upload-btn" id="filePreviewUploadBtn">Upload</button>
+      <button class="file-preview-remove-btn" id="filePreviewRemoveBtn" title="Remove file">✕</button>
+    </div>
+
     <!-- Input row -->
     <div class="input-row">
       <button class="attach-btn" id="uploadToggleBtn" title="Upload a document">&#128206;</button>
+      <input type="file" id="fileInput" accept=".pdf,.docx,.txt" style="display:none" />
       <input type="text" id="msgInput" placeholder="Type a message…" autocomplete="off" />
       <button class="send-btn" id="sendBtn" title="Send">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
@@ -367,16 +415,11 @@
       </button>
     </div>
 
-    <!-- Upload drawer (collapsible) -->
+    <!-- Upload drawer (drag/drop fallback) -->
     <div class="upload-drawer" id="uploadDrawer">
       <div class="drop-zone" id="dropZone">
         Drag &amp; drop a file here, or
         <label for="fileInput">browse</label>
-        <input type="file" id="fileInput" accept=".pdf,.docx,.txt" style="display:none" />
-      </div>
-      <div class="upload-actions">
-        <span class="upload-file-label" id="selectedFileLabel"></span>
-        <button class="upload-submit-btn" id="uploadBtn" disabled>Upload</button>
       </div>
       <div class="file-chips" id="uploadedFiles"></div>
     </div>
@@ -397,7 +440,6 @@
       if (i < idx)       el.classList.add("done");
       else if (i === idx) el.classList.add("active");
     });
-    // Show summary controls only at the summary stage
     document.getElementById("summaryBanner").classList.toggle("visible", stage === "summary");
   }
 
@@ -448,6 +490,7 @@
     document.getElementById("summaryText").textContent = "";
     document.getElementById("summaryText").classList.add("collapsed");
     document.getElementById("toggleSummaryBtn").textContent = "Show Full Summary";
+    clearSelectedFile();
     await initSession();
   });
 
@@ -568,7 +611,6 @@
         return;
       }
       bodyEl.textContent = data.summary;
-      // Always start collapsed after (re)generating
       bodyEl.classList.add("collapsed");
       toggleBtn.textContent = "Show Full Summary";
       card.style.display = "block";
@@ -604,29 +646,69 @@
   });
 
   // ─────────────────────────────────────────────
-  // Upload drawer toggle
+  // File size formatter
+  // ─────────────────────────────────────────────
+  function fmtSize(b) {
+    if (b < 1024)           return b + " B";
+    if (b < 1024 * 1024)    return (b / 1024).toFixed(1) + " KB";
+    return (b / (1024 * 1024)).toFixed(1) + " MB";
+  }
+  const formatFileSize = fmtSize;
+
+  // ─────────────────────────────────────────────
+  // File preview card
+  // ─────────────────────────────────────────────
+  const fileInput          = document.getElementById("fileInput");
+  const filePreviewCard    = document.getElementById("filePreviewCard");
+  const fileTypeBadge      = document.getElementById("fileTypeBadge");
+  const filePreviewName    = document.getElementById("filePreviewName");
+  const filePreviewSize    = document.getElementById("filePreviewSize");
+  const filePreviewUploadBtn = document.getElementById("filePreviewUploadBtn");
+  const filePreviewRemoveBtn = document.getElementById("filePreviewRemoveBtn");
+  let selectedFile = null;
+
+  const EXT_CLASSES = { pdf: "pdf", doc: "doc", docx: "docx", txt: "txt" };
+
+  function setSelectedFile(file) {
+    selectedFile = file;
+    const ext = file.name.split(".").pop().toLowerCase();
+    const badgeClass = EXT_CLASSES[ext] || "other";
+
+    fileTypeBadge.className = `file-type-badge ${badgeClass}`;
+    fileTypeBadge.textContent = ext.toUpperCase();
+    filePreviewName.textContent = file.name;
+    filePreviewSize.textContent = fmtSize(file.size);
+    filePreviewUploadBtn.disabled = false;
+
+    filePreviewCard.style.display = "flex";
+    // Close the drawer once a file is chosen
+    document.getElementById("uploadDrawer").classList.remove("open");
+  }
+
+  function clearSelectedFile() {
+    selectedFile = null;
+    fileInput.value = "";
+    filePreviewCard.style.display = "none";
+    filePreviewUploadBtn.disabled = true;
+  }
+
+  filePreviewRemoveBtn.addEventListener("click", clearSelectedFile);
+
+  // ─────────────────────────────────────────────
+  // Attach button — opens file picker directly
   // ─────────────────────────────────────────────
   document.getElementById("uploadToggleBtn").addEventListener("click", () => {
-    document.getElementById("uploadDrawer").classList.toggle("open");
-  });
-
-  // ─────────────────────────────────────────────
-  // File upload (logic preserved, UI restyled)
-  // ─────────────────────────────────────────────
-  const fileInput       = document.getElementById("fileInput");
-  const dropZone        = document.getElementById("dropZone");
-  const selectedFileLbl = document.getElementById("selectedFileLabel");
-  const uploadBtn       = document.getElementById("uploadBtn");
-  let   selectedFile    = null;
-
-  // Click on drop zone opens file picker
-  dropZone.addEventListener("click", (e) => {
-    if (e.target.tagName !== "LABEL" && e.target !== fileInput) fileInput.click();
+    fileInput.click();
   });
 
   fileInput.addEventListener("change", (e) => {
     if (e.target.files.length > 0) setSelectedFile(e.target.files[0]);
   });
+
+  // ─────────────────────────────────────────────
+  // Drag and drop (opens drawer on drag enter)
+  // ─────────────────────────────────────────────
+  const dropZone = document.getElementById("dropZone");
 
   dropZone.addEventListener("dragover",  (e) => { e.preventDefault(); dropZone.classList.add("dragover"); });
   dropZone.addEventListener("dragleave", ()  => { dropZone.classList.remove("dragover"); });
@@ -643,21 +725,16 @@
     }
   });
 
-  function setSelectedFile(file) {
-    selectedFile = file;
-    selectedFileLbl.textContent = `${file.name} (${fmtSize(file.size)})`;
-    uploadBtn.disabled = false;
-  }
+  // Open drawer on drag over the bottom panel
+  document.getElementById("bottomPanel") // fallback: listen on document
+  document.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    document.getElementById("uploadDrawer").classList.add("open");
+  });
 
-  function fmtSize(b) {
-    if (b < 1024)           return b + " B";
-    if (b < 1024 * 1024)    return (b / 1024).toFixed(1) + " KB";
-    return (b / (1024 * 1024)).toFixed(1) + " MB";
-  }
-
-  // Alias used by loadUploadedFiles
-  const formatFileSize = fmtSize;
-
+  // ─────────────────────────────────────────────
+  // Upload — triggered by preview card button
+  // ─────────────────────────────────────────────
   async function loadUploadedFiles() {
     const container = document.getElementById("uploadedFiles");
     try {
@@ -675,34 +752,34 @@
 
   loadUploadedFiles();
 
-  uploadBtn.addEventListener("click", async () => {
+  filePreviewUploadBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
     if (!sessionId) { alert("No active session — please wait."); return; }
 
+    const filename = selectedFile.name;
     const formData = new FormData();
     formData.append("file",       selectedFile);
     formData.append("session_id", sessionId);
 
-    uploadBtn.disabled    = true;
-    uploadBtn.textContent = "Uploading…";
+    filePreviewUploadBtn.disabled    = true;
+    filePreviewUploadBtn.textContent = "Uploading…";
 
     try {
       const res  = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) {
         alert("Upload failed: " + (data.error || "Unknown error"));
+        filePreviewUploadBtn.disabled    = false;
+        filePreviewUploadBtn.textContent = "Upload";
       } else {
-        fileInput.value          = "";
-        selectedFile             = null;
-        selectedFileLbl.textContent = "";
-        uploadBtn.disabled       = true;
+        clearSelectedFile();
+        appendMessage("bot", `📎 ${filename} uploaded`);
         loadUploadedFiles();
       }
     } catch (e) {
       alert("Network error during upload.");
-    } finally {
-      uploadBtn.textContent = "Upload";
-      if (selectedFile) uploadBtn.disabled = false;
+      filePreviewUploadBtn.disabled    = false;
+      filePreviewUploadBtn.textContent = "Upload";
     }
   });
 

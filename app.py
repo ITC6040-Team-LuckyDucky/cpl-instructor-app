@@ -194,7 +194,10 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             "Step 1: Ask for the student's name. "
             "Step 2: After they give their name, say a brief greeting and ask: 'Are you a current Northeastern University student?' (if yes, ask for their NUID). "
             "Step 3: After they answer, ask: 'What is your major or intended major?' "
-            "Step 4: After they answer, ask exactly this: 'How can I help you today? A: I'd like to waive a course based on my prior experience. B: I'd like to check if my experience qualifies me for a specific course. C: I have other questions about CPL.' "
+            "Step 4: After they answer, ask exactly this: 'How can I help you today? "
+            "A: I'd like to waive a course based on my prior experience. "
+            "B: I'd like to check if my experience qualifies me for a specific course. "
+            "C: I have other questions about CPL.' "
             "Never add remarks like 'great' or 'sounds good' between steps. Move to the next step immediately. "
             f"{STYLE}"
         ),
@@ -207,7 +210,11 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
         ),
         "experience": (
             f"You are a CPL interview assistant helping {name} seek credit for {course}. "
-            "Your goal is to find out whether this student has real hands-on experience with what {course} teaches — not their general background. "
+            f"Your goal is to get a brief picture of the student's hands-on experience relevant to {course} — where they worked, what they did, and roughly how long. "
+            "Once the student has described what they did and where, that is enough. "
+            "Do NOT keep asking follow-up questions about the same topic — this is not a deep-dive interview. "
+            "Accept conversational and informal answers. Not every student will give a perfectly structured response, and that is fine. "
+            "When they have given a reasonable answer, acknowledge it briefly and signal you are ready to move on. "
             + (
                 f"The student has uploaded documents describing their background. "
                 f"Pick ONE specific topic or skill that {course} covers, find the most relevant role or project in their documents, "
@@ -327,7 +334,7 @@ def advance_stage(session_id, current_stage):
     return next_stage
 
 
-def should_advance(current_stage, user_message, assistant_response):
+def should_advance(current_stage, user_message, assistant_response, session_id=None):
     """
     Simple heuristic check — returns True if the conversation has collected
     enough information to move past the current stage.
@@ -350,13 +357,43 @@ def should_advance(current_stage, user_message, assistant_response):
         return any(kw in msg for kw in course_keywords) or len(words) >= 4
 
     if current_stage == "experience":
-        # Advance when the user describes a work role or duration
         experience_keywords = [
-            "worked", "work", "job", "role", "position", "years", "months",
-            "manager", "engineer", "developer", "nurse", "teacher", "director",
-            "employed", "company", "organization", "team", "project",
+            # job/role
+            "worked", "work", "working", "job", "role", "position", "internship",
+            "manager", "engineer", "developer", "analyst", "designer", "nurse",
+            "teacher", "director", "intern", "freelance", "contractor",
+            # place/org
+            "company", "organization", "startup", "firm", "agency", "school",
+            "university", "hospital", "lab", "team", "department",
+            # duration
+            "years", "months", "weeks", "year", "month",
+            # what they did
+            "built", "created", "developed", "designed", "implemented", "used",
+            "wrote", "managed", "led", "ran", "deployed", "maintained",
+            "project", "system", "app", "application", "tool", "software",
+            "database", "api", "algorithm", "model", "data",
+            # common filler that still signals a real answer
+            "employed", "experience", "background",
         ]
-        return any(kw in msg for kw in experience_keywords)
+        if any(kw in msg for kw in experience_keywords):
+            return True
+        # Fallback: advance after 2+ user turns in this stage regardless of keywords
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
+                (session_id,),
+            )
+            total_user_turns = cursor.fetchone()[0]
+            conn.close()
+            # welcome stage uses ~4 turns; experience starts around turn 5+
+            # advance if the student has sent at least 2 messages since experience began
+            stage_turn_estimate = total_user_turns - 4
+            return stage_turn_estimate >= 2
+        except Exception:
+            pass
+        return False
 
     if current_stage == "skills_reflection":
         # Advance when the user gives a concrete example or description
@@ -1267,7 +1304,7 @@ def api_chat():
 
         # Check whether the app should advance to the next interview stage
         # (current_stage was already fetched above before the OpenAI call)
-        if should_advance(current_stage, user_message, answer):
+        if should_advance(current_stage, user_message, answer, session_id=session_id):
             current_stage = advance_stage(session_id, current_stage)
 
         return jsonify({"answer": answer, "stage": current_stage})

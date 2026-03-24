@@ -272,6 +272,7 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             "Do not make any judgment, recommendation, or assessment about whether they qualify. "
             "Do not use words like 'strong', 'impressive', 'well-positioned', or anything evaluative. "
             "Just confirm what was shared in 2 to 3 sentences — no lists, no headers. "
+            "If the student's message mentions uploading a new file, acknowledge it by name and say you will update their summary to include it. "
             f"{STYLE}"
         ),
     }

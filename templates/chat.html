@@ -443,6 +443,7 @@
   const STAGES = ["welcome", "course_id", "experience", "skills_reflection", "evidence", "summary"];
 
   function updateStageUI(stage) {
+    currentStage = stage;
     const idx = STAGES.indexOf(stage);
     document.querySelectorAll(".stage-pill").forEach((el, i) => {
       el.classList.remove("active", "done");
@@ -455,7 +456,8 @@
   // ─────────────────────────────────────────────
   // Session management
   // ─────────────────────────────────────────────
-  let sessionId = null;
+  let sessionId    = null;
+  let currentStage = "welcome";
 
   async function initSession() {
     try {
@@ -808,6 +810,27 @@
         loadUploadedFiles();
         // Auto-send a chat message so the bot acknowledges the upload
         await sendChatMessage(`I just uploaded ${filename}.`);
+        // If at the summary stage, auto-regenerate the summary after the bot responds
+        if (currentStage === "summary") {
+          const card    = document.getElementById("summaryCard");
+          const bodyEl  = document.getElementById("summaryText");
+          const toggleBtn = document.getElementById("toggleSummaryBtn");
+          try {
+            const regenRes  = await fetch(`/api/session/${sessionId}/summary`, { method: "POST" });
+            const regenData = await regenRes.json();
+            if (regenRes.ok && regenData.summary) {
+              bodyEl.textContent = regenData.summary;
+              bodyEl.classList.add("collapsed");
+              bodyEl.classList.remove("expanded");
+              toggleBtn.textContent = "Show Full Summary";
+              card.style.display = "block";
+            } else {
+              appendMessage("bot", "Note: summary could not be updated automatically. Use the Regenerate button.");
+            }
+          } catch (e) {
+            appendMessage("bot", "Note: summary could not be updated automatically. Use the Regenerate button.");
+          }
+        }
       }
     } catch (e) {
       alert("Network error during upload.");

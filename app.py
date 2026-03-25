@@ -181,10 +181,12 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
     experience_summary = d.get("experience_description") or "their prior experience"
 
     STYLE = (
-        "Keep your response under 3 sentences. "
+        "Keep your response under 4 sentences total. "
         "Ask only ONE question. "
         "Do not use bullet points, numbered lists, or markdown formatting. "
         "Speak naturally like a friendly interviewer. "
+        "Use line breaks to separate distinct thoughts: if you acknowledge something and then ask a question, put a blank line between them. For example: 'Got it.\n\nCan you tell me more about X?' Keep each paragraph to 1–2 sentences. "
+        "Do not merge acknowledgment and question into one run-on block. "
         "CRITICAL: Every response must end with either a question for the student or a clear transition to the next topic. "
         "Never end with a statement that leaves the student with nothing to respond to. "
         "If you have enough information for this stage, briefly acknowledge and immediately ask the question that moves to the next topic. "

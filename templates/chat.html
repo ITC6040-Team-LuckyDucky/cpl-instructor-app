@@ -594,14 +594,31 @@
     return null;
   }
 
-  // Returns true if the bot message looks like a yes/no question.
-  const YES_NO_TRIGGERS = [
-    /\bare you\b/i, /\bdo you\b/i, /\bdid you\b/i, /\bwould you\b/i,
-    /\bis there\b/i, /\bhave you\b/i, /\bcan you confirm\b/i,
+  // Returns true only for genuinely binary yes/no questions.
+  // A question qualifies only if it starts with a binary opener AND
+  // does not contain any open-ended word that signals a descriptive answer.
+  const YES_NO_OPENERS = [
+    /^are you\b/i, /^do you\b/i, /^did you\b/i,
+    /^is there\b/i, /^have you\b/i, /^would you like to\b/i,
+  ];
+  const OPEN_ENDED_WORDS = [
+    /\bwhich\b/i, /\bwhat\b/i, /\bhow\b/i, /\bwhere\b/i,
+    /\bwhen\b/i,  /\bwho\b/i,  /\bwhy\b/i,
+    /\bdescribe\b/i, /\bexplain\b/i, /\btell me\b/i,
+    /\bwalk me through\b/i, /\bshare\b/i,
   ];
   function isYesNoQuestion(text) {
     if (!text.includes("?")) return false;
-    return YES_NO_TRIGGERS.some(re => re.test(text));
+    // Find the sentence that actually contains the question mark
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    const questionSentences = sentences.filter(s => s.includes("?"));
+    return questionSentences.some(sentence => {
+      const trimmed = sentence.trim();
+      const startsWithBinaryOpener = YES_NO_OPENERS.some(re => re.test(trimmed));
+      if (!startsWithBinaryOpener) return false;
+      const containsOpenEnded = OPEN_ENDED_WORDS.some(re => re.test(trimmed));
+      return !containsOpenEnded;
+    });
   }
 
   // Render a group of choice buttons beneath a message wrapper.

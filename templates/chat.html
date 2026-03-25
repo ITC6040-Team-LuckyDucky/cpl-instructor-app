@@ -374,6 +374,31 @@
     }
     .chip-size { color: #888; }
 
+    /* ── Quick-reply choice buttons ── */
+    .choice-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 8px;
+      align-self: flex-start;
+    }
+    .choice-group.inline { flex-direction: row; }
+    .choice-btn {
+      background: #fff;
+      border: 1.5px solid #1976d2;
+      color: #1976d2;
+      border-radius: 20px;
+      padding: 6px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      transition: background .15s, color .15s;
+      white-space: nowrap;
+    }
+    .choice-btn:hover  { background: #e3f0fd; }
+    .choice-btn:disabled { opacity: .45; cursor: default; background: #f5f5f5; border-color: #ccc; color: #999; }
+
     /* Scrollbar (chat area) */
     .chat-area::-webkit-scrollbar { width: 5px; }
     .chat-area::-webkit-scrollbar-thumb { background: #ddd; border-radius: 3px; }
@@ -552,6 +577,56 @@
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
+  // ── Choice button helpers ──────────────────────
+  // Parse "A: ...\nB: ...\nC: ..." lines out of a bot message.
+  // Returns { intro, choices: [{label, text}, …] } or null if not found.
+  function parseABCOptions(text) {
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    const choiceRe = /^([A-Ca-c])[):.]\s*(.+)/;
+    const choices = [];
+    const introLines = [];
+    for (const line of lines) {
+      const m = line.match(choiceRe);
+      if (m) choices.push({ label: m[1].toUpperCase(), text: m[2] });
+      else if (choices.length === 0) introLines.push(line);
+    }
+    if (choices.length >= 2) return { intro: introLines.join("\n"), choices };
+    return null;
+  }
+
+  // Returns true if the bot message looks like a yes/no question.
+  const YES_NO_TRIGGERS = [
+    /\bare you\b/i, /\bdo you\b/i, /\bdid you\b/i, /\bwould you\b/i,
+    /\bis there\b/i, /\bhave you\b/i, /\bcan you confirm\b/i,
+  ];
+  function isYesNoQuestion(text) {
+    if (!text.includes("?")) return false;
+    return YES_NO_TRIGGERS.some(re => re.test(text));
+  }
+
+  // Render a group of choice buttons beneath a message wrapper.
+  // choices: [{label, text}, …] or [{label: "Yes"}, {label: "No"}]
+  // inline: true → side-by-side (yes/no); false → stacked (A/B/C)
+  function appendChoiceButtons(wrapper, choices, inline) {
+    const group = document.createElement("div");
+    group.className = "choice-group" + (inline ? " inline" : "");
+
+    choices.forEach(({ label, text }) => {
+      const btn = document.createElement("button");
+      btn.className = "choice-btn";
+      btn.textContent = text ? `${label}: ${text}` : label;
+      btn.addEventListener("click", () => {
+        // Disable all buttons in this group so the user can't click again
+        group.querySelectorAll(".choice-btn").forEach(b => { b.disabled = true; });
+        // Send just the label letter (or "Yes"/"No") as the chat message
+        sendChatMessage(label);
+      });
+      group.appendChild(btn);
+    });
+
+    wrapper.appendChild(group);
+  }
+
   function appendMessage(role, text) {
     const inner   = document.getElementById("chatInner");
     const wrapper = document.createElement("div");
@@ -559,12 +634,38 @@
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = text;
 
     const time = document.createElement("div");
     time.className = "msg-time";
     time.textContent = fmtTime(new Date());
 
+    if (role === "bot") {
+      // ── Try to detect A/B/C multiple-choice ──
+      const abc = parseABCOptions(text);
+      if (abc) {
+        bubble.textContent = abc.intro || text;
+        wrapper.appendChild(bubble);
+        wrapper.appendChild(time);
+        inner.appendChild(wrapper);
+        appendChoiceButtons(wrapper, abc.choices, false);
+        scrollToBottom();
+        return;
+      }
+
+      // ── Try to detect yes/no question ──
+      if (isYesNoQuestion(text)) {
+        bubble.textContent = text;
+        wrapper.appendChild(bubble);
+        wrapper.appendChild(time);
+        inner.appendChild(wrapper);
+        appendChoiceButtons(wrapper, [{ label: "Yes" }, { label: "No" }], true);
+        scrollToBottom();
+        return;
+      }
+    }
+
+    // Default: plain text
+    bubble.textContent = text;
     wrapper.appendChild(bubble);
     wrapper.appendChild(time);
     inner.appendChild(wrapper);

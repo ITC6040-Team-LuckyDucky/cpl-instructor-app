@@ -715,6 +715,43 @@
   const msgInput = document.getElementById("msgInput");
   const sendBtn  = document.getElementById("sendBtn");
 
+  // Returns true if the message is substantive enough to warrant a summary regen.
+  // Filters out short acknowledgements like "yes", "no", "ok", "thanks", etc.
+  const TRIVIAL_REPLIES = new Set([
+    "yes", "no", "ok", "okay", "sure", "yep", "nope", "yea", "yeah",
+    "nah", "thanks", "thank you", "got it", "done", "fine", "alright",
+    "nothing", "none", "not really", "i'm good", "im good", "all good",
+  ]);
+  function isSubstantiveMessage(msg) {
+    const trimmed = msg.trim().toLowerCase();
+    if (TRIVIAL_REPLIES.has(trimmed)) return false;
+    return trimmed.split(/\s+/).length > 5;
+  }
+
+  // Silently regenerates the summary and updates the card if it's visible.
+  async function autoRegenSummary() {
+    if (!sessionId) return;
+    try {
+      const card    = document.getElementById("summaryCard");
+      const bodyEl  = document.getElementById("summaryText");
+      const toggleBtn = document.getElementById("toggleSummaryBtn");
+      const regenRes  = await fetch(`/api/session/${sessionId}/summary`, { method: "POST" });
+      const regenData = await regenRes.json();
+      if (regenRes.ok && regenData.summary) {
+        bodyEl.textContent = regenData.summary;
+        bodyEl.classList.add("collapsed");
+        bodyEl.classList.remove("expanded");
+        toggleBtn.textContent = "Show Full Summary";
+        card.style.display = "block";
+        updateSummaryMeta();
+        pulseSummaryCard();
+        showSummaryToast();
+      }
+    } catch (e) {
+      // Silent failure — the user can always click Regenerate manually
+    }
+  }
+
   // Core chat API call — accepts an explicit message string
   async function sendChatMessage(msg) {
     if (!sessionId) {
@@ -742,6 +779,12 @@
       } else {
         appendMessage("bot", data.answer || "");
         updateStageUI(data.stage || "welcome");
+
+        // Auto-regenerate the summary if we're in the summary stage and the
+        // user sent a substantive message (not just "yes", "no", "ok", etc.)
+        if (currentStage === "summary" && isSubstantiveMessage(msg)) {
+          autoRegenSummary();
+        }
       }
     } catch (e) {
       hideTyping();

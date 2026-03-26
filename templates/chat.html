@@ -146,31 +146,6 @@
     }
     .bottom-inner { max-width: 760px; margin: 0 auto; }
 
-    /* Summary prompt banner */
-    .summary-banner {
-      display: none;
-      background: #e8f5e9;
-      border: 1px solid #a5d6a7;
-      border-radius: 8px;
-      padding: 10px 14px;
-      margin-bottom: 10px;
-      font-size: 13px;
-      color: #2e7d32;
-      display: none;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-    .summary-banner.visible { display: flex; }
-    .gen-summary-btn {
-      background: #2e7d32; color: #fff;
-      border: none; border-radius: 6px;
-      padding: 6px 14px; font-size: 12px;
-      cursor: pointer; white-space: nowrap; flex-shrink: 0;
-    }
-    .gen-summary-btn:hover { background: #1b5e20; }
-    .gen-summary-btn:disabled { background: #aaa; cursor: not-allowed; }
-
     /* Summary result card */
     .summary-card {
       display: none;
@@ -467,12 +442,6 @@
 <div class="bottom-panel">
   <div class="bottom-inner">
 
-    <!-- Summary banner (appears at summary stage) -->
-    <div class="summary-banner" id="summaryBanner">
-      <span>The interview is complete. Generate your CPL portfolio summary.</span>
-      <button class="gen-summary-btn" id="generateSummaryBtn">Generate Summary</button>
-    </div>
-
     <!-- Summary card (appears after generation) -->
     <div class="summary-card" id="summaryCard">
       <div class="summary-card-header">
@@ -536,7 +505,10 @@
   // ─────────────────────────────────────────────
   const STAGES = ["welcome", "course_id", "experience", "skills_reflection", "evidence", "summary"];
 
+  let summaryAutoGenTriggered = false;
+
   function updateStageUI(stage) {
+    const previousStage = currentStage;
     currentStage = stage;
     const idx = STAGES.indexOf(stage);
     document.querySelectorAll(".stage-pill").forEach((el, i) => {
@@ -544,7 +516,36 @@
       if (i < idx)       el.classList.add("done");
       else if (i === idx) el.classList.add("active");
     });
-    document.getElementById("summaryBanner").classList.toggle("visible", stage === "summary");
+    // Auto-generate the summary the first time we enter the summary stage
+    if (stage === "summary" && previousStage !== "summary" && !summaryAutoGenTriggered) {
+      summaryAutoGenTriggered = true;
+      triggerInitialSummaryGeneration();
+    }
+  }
+
+  async function triggerInitialSummaryGeneration() {
+    if (!sessionId) return;
+    const card      = document.getElementById("summaryCard");
+    const bodyEl    = document.getElementById("summaryText");
+    const toggleBtn = document.getElementById("toggleSummaryBtn");
+    try {
+      const res  = await fetch(`/api/session/${sessionId}/summary`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.summary) {
+        bodyEl.textContent = data.summary;
+        bodyEl.classList.add("collapsed");
+        bodyEl.classList.remove("expanded");
+        toggleBtn.textContent = "Show Full Summary";
+        card.style.display = "block";
+        summaryVersion++;
+        updateSummaryMeta();
+        pulseSummaryCard();
+        showSummaryToast();
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    } catch (e) {
+      // Silent failure — the Regenerate button is still available
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -599,6 +600,7 @@
     document.getElementById("summaryVersionBadge").textContent = "";
     document.getElementById("summaryTimestamp").textContent = "";
     summaryVersion = 0;
+    summaryAutoGenTriggered = false;
     clearSelectedFile();
     await initSession();
   });
@@ -935,12 +937,11 @@
       alert("Network error generating summary.");
     } finally {
       btn.disabled    = false;
-      btn.textContent = btn.id === "generateSummaryBtn" ? "Regenerate Summary" : "Regenerate";
+      btn.textContent = "Regenerate";
     }
   }
 
-  document.getElementById("generateSummaryBtn").addEventListener("click", (e) => doGenerateSummary(e.currentTarget));
-  document.getElementById("regenSummaryBtn").addEventListener("click",    (e) => doGenerateSummary(e.currentTarget));
+  document.getElementById("regenSummaryBtn").addEventListener("click", (e) => doGenerateSummary(e.currentTarget));
 
   function collapseSummary() {
     const bodyEl    = document.getElementById("summaryText");

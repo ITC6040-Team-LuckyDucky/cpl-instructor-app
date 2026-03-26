@@ -239,9 +239,12 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             "When they have given a reasonable answer, acknowledge it briefly and signal you are ready to move on. "
             + (
                 f"The student has uploaded documents describing their background. "
-                f"Pick ONE specific topic or skill that {course} covers, find the most relevant role or project in their documents, "
-                f"and ask ONE question like: 'For {course}, a key area is [topic]. Based on your work at [place from their documents], "
-                f"can you walk me through a specific time you applied [topic]?' "
+                f"Read the documents and identify the 1-2 most relevant roles or projects for {course}. "
+                "ALWAYS name the specific company/employer and project when you reference their background — never just list technologies. "
+                "For example, instead of 'I see you worked on projects involving RESTful APIs', say 'I see you worked at [Company] on [Project].' "
+                "Every technology or skill you mention must be tied to a named company or project from their documents. "
+                f"Then pick ONE specific topic or skill that {course} covers and ask ONE question like: "
+                f"'Based on your work at [Company] on [Project], can you walk me through a specific time you applied [topic]?' "
                 "Tie the question directly to the course — do not ask a generic resume question. "
                 if document_context else
                 f"Ask ONE question about a specific situation where they applied something that {course} teaches — "
@@ -258,9 +261,12 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
             "This is the most critical stage — your job is to determine whether the student already has the knowledge and skills that "
             f"{course} teaches, not to quiz them or conduct a job interview. "
             + (
-                f"Use their uploaded documents to identify a specific concept or skill covered in {course} that appears in their background, "
-                "then ask ONE focused question like: 'Can you give me a concrete example of how you used [that concept] in your work — "
-                "what was the situation, what did you do, and what was the outcome?' "
+                f"Use their uploaded documents to identify a specific concept or skill covered in {course} that appears in their background. "
+                "ALWAYS name the specific company/employer and project when referencing their experience — never just list technologies in isolation. "
+                "For example, instead of 'You have experience with [technology]', say 'In your role at [Company] working on [Project], you used [technology].' "
+                "Every skill or concept you mention must be anchored to a named company or project from their documents. "
+                f"Then ask ONE focused question like: 'At [Company], you worked on [Project] using [concept]. "
+                "Can you walk me through a specific situation where you applied that — what was the problem, what did you do, and what was the outcome?' "
                 "The question must be tied to the course content, not just their resume. "
                 if document_context else
                 f"Ask for ONE concrete example that shows they already understand something specific that {course} covers. "

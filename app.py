@@ -384,15 +384,29 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
         return any(kw in msg for kw in course_keywords) or len(words) >= 4
 
     def user_turns_in_stage(min_turns):
-        """Returns True if the student has sent >= min_turns messages in this session."""
+        """Returns True if the student has sent >= min_turns messages since the current stage started.
+        Uses interview_state.updated_at as the stage-start timestamp so long welcome-stage
+        conversations don't prematurely fire the fallback for later stages."""
         if not session_id:
             return False
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            # When did the current stage start?
             cursor.execute(
-                "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
+                "SELECT updated_at FROM interview_state WHERE session_id = ?",
                 (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return False
+            stage_started_at = row[0]
+            # Count only user messages sent AFTER the stage started
+            cursor.execute(
+                "SELECT COUNT(*) FROM messages "
+                "WHERE session_id = ? AND role = 'user' AND timestamp > ?",
+                (session_id, stage_started_at),
             )
             count = cursor.fetchone()[0]
             conn.close()
@@ -414,7 +428,7 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
             "database", "api", "algorithm", "model", "data",
             "employed", "experience", "background",
         ]
-        return any(kw in msg for kw in experience_keywords) or user_turns_in_stage(7)
+        return any(kw in msg for kw in experience_keywords) or user_turns_in_stage(5)
 
     if current_stage == "skills_reflection":
         reflection_keywords = [
@@ -422,7 +436,7 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
             "i used", "i learned", "i managed", "i built", "i created",
             "i led", "responsible", "skill", "knowledge", "ability",
         ]
-        return any(kw in msg for kw in reflection_keywords) or len(words) >= 15 or user_turns_in_stage(10)
+        return any(kw in msg for kw in reflection_keywords) or len(words) >= 15 or user_turns_in_stage(4)
 
     if current_stage == "evidence":
         evidence_keywords = [
@@ -431,7 +445,7 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
             "no", "nope", "nah", "nothing", "none", "i'm good", "im good",
             "that's it", "thats it", "all done", "not right now", "i just did",
         ]
-        return any(kw in msg for kw in evidence_keywords) or user_turns_in_stage(13)
+        return any(kw in msg for kw in evidence_keywords) or user_turns_in_stage(4)
 
     # "summary" is the final stage — never advance
     return False
@@ -1045,21 +1059,52 @@ def api_generate_summary(session_id):
             f"- {k}: {v}" for k, v in collected.items() if v
         )
 
+        # Fetch uploaded documents to include as context and appendix
+        doc_uploads = []
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT TOP 5 filename, extracted_text FROM uploads "
+                "WHERE session_id = ? AND extracted_text IS NOT NULL "
+                "ORDER BY uploaded_at ASC",
+                (session_id,),
+            )
+            doc_uploads = cursor.fetchall()
+            conn.close()
+        except Exception:
+            app.logger.exception("Failed to load uploads for summary appendix")
+
+        doc_context_str = ""
+        if doc_uploads:
+            doc_context_str = "\n\nUPLOADED DOCUMENTS (use as source material — do not guess beyond what is written here):\n" + "\n\n".join(
+                f"--- {fn} ---\n{(text or '')[:3000]}" for fn, text in doc_uploads
+            )
+
         summary_prompt = (
             "You are a CPL (Credit for Prior Learning) portfolio writer. "
-            "Based on the structured data and conversation transcript below, "
-            "generate a comprehensive CPL portfolio summary for the student. "
+            "Based on the structured data, conversation transcript, and any uploaded documents below, "
+            "generate a factual CPL portfolio summary for the student. "
             "The summary must include:\n"
             "  1. Student name\n"
             "  2. Course or competency area they are seeking credit for\n"
             "  3. Relevant professional or life experience (employer, role, duration)\n"
             "  4. Skills and knowledge demonstrated, with concrete examples\n"
-            "  5. Evidence provided (documents uploaded or described)\n"
-            "  6. A recommendation statement assessing the strength of their CPL claim\n\n"
+            "  5. Evidence provided (documents uploaded or described)\n\n"
+            "CRITICAL RULES:\n"
+            "- Only include information that was explicitly stated by the student during the interview "
+            "or is directly extractable from their uploaded documents. "
+            "- Never use words like 'presumably', 'likely', 'probably', 'may include', or 'appears to'. "
+            "If a piece of information was not collected, write 'Not provided' for that item — do not guess or infer.\n"
+            "- Do NOT include any recommendation, evaluation, or judgment about whether the student "
+            "qualifies for CPL credit. This summary is a neutral factual report only.\n"
+            "- Do not use phrases like 'strong case', 'well-positioned', 'impressive background', "
+            "or any evaluative language.\n\n"
             "Write in a professional, third-person tone suitable for submission to an academic "
             "review committee. Be thorough but concise.\n\n"
             f"STRUCTURED DATA COLLECTED:\n{collected_text}\n\n"
             f"CONVERSATION TRANSCRIPT:\n{history_text}"
+            f"{doc_context_str}"
         )
 
         response = client.chat.completions.create(
@@ -1069,6 +1114,21 @@ def api_generate_summary(session_id):
         )
 
         summary_text = (response.choices[0].message.content or "").strip()
+
+        # Append uploaded document texts as a literal appendix
+        if doc_uploads:
+            appendix_parts = []
+            for i, (fn, text) in enumerate(doc_uploads, 1):
+                label = chr(64 + i)  # A, B, C, …
+                appendix_parts.append(
+                    f"Appendix {label}: {fn}\n{'─' * 40}\n{(text or '').strip()}"
+                )
+            summary_text += (
+                "\n\n" + "=" * 60 + "\n"
+                "UPLOADED DOCUMENTS\n"
+                + "=" * 60 + "\n\n"
+                + "\n\n".join(appendix_parts)
+            )
 
         # Save to the summaries table
         conn = get_db_connection()

@@ -182,7 +182,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
 
     STYLE = (
         "Keep your response under 4 sentences total. "
-        "Ask only ONE question. "
+        "Ask only ONE simple question. Do not chain multiple sub-questions with commas or 'and'. "
+        "For example, instead of 'What was the problem, what did you do, and what was the result?', just ask 'Can you walk me through what you did?' "
         "Do not use bullet points, numbered lists, or markdown formatting. "
         "Speak naturally like a friendly interviewer. "
         "Use line breaks to separate distinct thoughts: if you acknowledge something and then ask a question, put a blank line between them. For example: 'Got it.\n\nCan you tell me more about X?' Keep each paragraph to 1–2 sentences. "
@@ -243,8 +244,9 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
                 "ALWAYS name the specific company/employer and project when you reference their background — never just list technologies. "
                 "For example, instead of 'I see you worked on projects involving RESTful APIs', say 'I see you worked at [Company] on [Project].' "
                 "Every technology or skill you mention must be tied to a named company or project from their documents. "
-                f"Then pick ONE specific topic or skill that {course} covers and ask ONE question like: "
-                f"'Based on your work at [Company] on [Project], can you walk me through a specific time you applied [topic]?' "
+                "Only reference facts that are explicitly stated in the uploaded documents. Never infer or assume — do not use words like 'likely', 'probably', 'presumably', or 'which may have involved'. If the document doesn't mention something directly, ask the student about it instead of guessing. "
+                f"Then pick ONE specific topic or skill that {course} covers and ask ONE simple question like: "
+                f"'Based on your work at [Company] on [Project], can you walk me through what you did with [topic]?' "
                 "Tie the question directly to the course — do not ask a generic resume question. "
                 if document_context else
                 f"Ask ONE question about a specific situation where they applied something that {course} teaches — "
@@ -265,8 +267,8 @@ def get_system_prompt(stage, collected_data=None, document_context=None):
                 "ALWAYS name the specific company/employer and project when referencing their experience — never just list technologies in isolation. "
                 "For example, instead of 'You have experience with [technology]', say 'In your role at [Company] working on [Project], you used [technology].' "
                 "Every skill or concept you mention must be anchored to a named company or project from their documents. "
-                f"Then ask ONE focused question like: 'At [Company], you worked on [Project] using [concept]. "
-                "Can you walk me through a specific situation where you applied that — what was the problem, what did you do, and what was the outcome?' "
+                "Only reference facts that are explicitly stated in the uploaded documents. Never infer or assume — do not use words like 'likely', 'probably', 'presumably', or 'which may have involved'. If the document doesn't mention something directly, ask the student about it instead of guessing. "
+                f"Then ask ONE simple focused question like: 'At [Company], you worked on [Project] using [concept] — can you walk me through what you actually did?' "
                 "The question must be tied to the course content, not just their resume. "
                 if document_context else
                 f"Ask for ONE concrete example that shows they already understand something specific that {course} covers. "

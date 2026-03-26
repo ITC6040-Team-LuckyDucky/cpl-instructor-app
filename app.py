@@ -378,8 +378,12 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
     enough information to move past the current stage.
     The LLM does NOT make this decision; the app does.
     """
-    msg = user_message.lower()
+    msg = user_message.lower().strip()
     words = msg.split()
+
+    # Auto-sent upload acknowledgement messages should never trigger stage advancement
+    if msg.startswith("i just uploaded"):
+        return False
 
     if current_stage == "welcome":
         # Advance only when the student picks an option (A, B, or C) from the final menu
@@ -450,13 +454,18 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
         return any(kw in msg for kw in reflection_keywords) or len(words) >= 15 or user_turns_in_stage(4)
 
     if current_stage == "evidence":
-        evidence_keywords = [
-            "uploaded", "attached", "no more", "that's all", "done",
-            "no evidence", "nothing else", "finished", "complete",
-            "no", "nope", "nah", "nothing", "none", "i'm good", "im good",
-            "that's it", "thats it", "all done", "not right now", "i just did",
+        # Exact whole-message matches for clear "I'm done" signals
+        exact_done = {"no", "nope", "nah", "none"}
+        if msg in exact_done:
+            return True
+        # Phrase matches — only advance on unambiguous completion phrases
+        evidence_phrases = [
+            "no more", "that's all", "thats all", "that's it", "thats it",
+            "all done", "i'm good", "im good", "nothing else", "no evidence",
+            "no documents", "finished", "complete", "nothing to upload",
+            "done uploading",
         ]
-        return any(kw in msg for kw in evidence_keywords) or user_turns_in_stage(4)
+        return any(phrase in msg for phrase in evidence_phrases) or user_turns_in_stage(8)
 
     # "summary" is the final stage — never advance
     return False

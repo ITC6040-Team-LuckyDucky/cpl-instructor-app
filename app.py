@@ -1076,22 +1076,36 @@ def api_generate_summary(session_id):
             app.logger.exception("Failed to load uploads for summary appendix")
 
         doc_context_str = ""
+        doc_names_str = ""
         if doc_uploads:
-            doc_context_str = "\n\nUPLOADED DOCUMENTS (use as source material — do not guess beyond what is written here):\n" + "\n\n".join(
-                f"--- {fn} ---\n{(text or '')[:3000]}" for fn, text in doc_uploads
+            doc_context_str = (
+                "\n\nUPLOADED DOCUMENTS — use these as source material only; "
+                "do not guess beyond what is written here:\n"
+                + "\n\n".join(
+                    f"--- {fn} ---\n{(text or '')[:3000]}" for fn, text in doc_uploads
+                )
+            )
+            doc_names_str = (
+                "\n\nFor the 'Documents Provided' section, write one 2-3 sentence description "
+                "per document that summarises its type and key contents based strictly on the text above. "
+                "Use the format:\n"
+                "  <filename>: <2-3 sentence summary of what the document contains>\n"
+                "One entry per document. Do not add any content that is not in the document text."
             )
 
         summary_prompt = (
             "You are a CPL (Credit for Prior Learning) portfolio writer. "
             "Based on the structured data, conversation transcript, and any uploaded documents below, "
             "generate a factual CPL portfolio summary for the student. "
-            "The summary must include:\n"
+            "The summary must include these sections:\n"
             "  1. Student name\n"
             "  2. Course or competency area they are seeking credit for\n"
             "  3. Relevant professional or life experience (employer, role, duration)\n"
             "  4. Skills and knowledge demonstrated, with concrete examples\n"
-            "  5. Evidence provided (documents uploaded or described)\n\n"
-            "CRITICAL RULES:\n"
+            "  5. Evidence provided (documents uploaded or described)\n"
+            + ("  6. Documents Provided: a brief factual description of each uploaded document\n"
+               if doc_uploads else "")
+            + "\nCRITICAL RULES:\n"
             "- Only include information that was explicitly stated by the student during the interview "
             "or is directly extractable from their uploaded documents. "
             "- Never use words like 'presumably', 'likely', 'probably', 'may include', or 'appears to'. "
@@ -1105,6 +1119,7 @@ def api_generate_summary(session_id):
             f"STRUCTURED DATA COLLECTED:\n{collected_text}\n\n"
             f"CONVERSATION TRANSCRIPT:\n{history_text}"
             f"{doc_context_str}"
+            f"{doc_names_str}"
         )
 
         response = client.chat.completions.create(
@@ -1114,21 +1129,6 @@ def api_generate_summary(session_id):
         )
 
         summary_text = (response.choices[0].message.content or "").strip()
-
-        # Append uploaded document texts as a literal appendix
-        if doc_uploads:
-            appendix_parts = []
-            for i, (fn, text) in enumerate(doc_uploads, 1):
-                label = chr(64 + i)  # A, B, C, …
-                appendix_parts.append(
-                    f"Appendix {label}: {fn}\n{'─' * 40}\n{(text or '').strip()}"
-                )
-            summary_text += (
-                "\n\n" + "=" * 60 + "\n"
-                "UPLOADED DOCUMENTS\n"
-                + "=" * 60 + "\n\n"
-                + "\n\n".join(appendix_parts)
-            )
 
         # Save to the summaries table
         conn = get_db_connection()
@@ -1150,6 +1150,63 @@ def api_generate_summary(session_id):
     except Exception as e:
         app.logger.exception("Summary generation failed")
         return jsonify({"error": f"Summary generation failed: {type(e).__name__}", "details": str(e)}), 500
+
+
+@app.get("/api/session/<session_id>/download")
+def api_download_package(session_id):
+    """
+    Returns a ZIP file containing:
+      - cpl_summary.txt   (most recent generated summary)
+      - documents/<filename> for every file the student uploaded this session
+    """
+    import io
+    import zipfile
+    from flask import send_file
+    from storage import download_file
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Latest summary text
+        cursor.execute(
+            "SELECT summary_text FROM summaries "
+            "WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        summary_text = row[0] if row else "No summary has been generated for this session yet."
+
+        # All uploaded files
+        cursor.execute(
+            "SELECT filename, blob_url FROM uploads "
+            "WHERE session_id = ? ORDER BY uploaded_at ASC",
+            (session_id,),
+        )
+        uploads = cursor.fetchall()
+        conn.close()
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("cpl_summary.txt", summary_text)
+            for filename, blob_url in uploads:
+                try:
+                    file_bytes = download_file(blob_url)
+                    zf.writestr(f"documents/{filename}", file_bytes)
+                except Exception:
+                    app.logger.warning(f"Could not add {filename} to ZIP — skipping")
+
+        zip_buffer.seek(0)
+        return send_file(
+            zip_buffer,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"cpl-package-{session_id[:8]}.zip",
+        )
+
+    except Exception as e:
+        app.logger.exception("Failed to generate download package")
+        return jsonify({"error": f"Download failed: {type(e).__name__}", "details": str(e)}), 500
 
 
 @app.get("/api/session/<session_id>/summary")

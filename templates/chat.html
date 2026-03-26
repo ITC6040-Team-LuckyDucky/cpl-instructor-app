@@ -453,7 +453,7 @@
           <div class="summary-meta" id="summaryMeta"></div>
         </div>
         <div class="summary-card-actions">
-          <button class="download-btn" id="downloadSummaryBtn" title="Download as text file">Download</button>
+          <button class="download-btn" id="downloadSummaryBtn" title="Download summary + uploaded documents as ZIP">Download Package</button>
           <button class="summary-collapse-btn" id="summaryCollapseBtn" title="Collapse summary">▲ Hide</button>
         </div>
       </div>
@@ -863,15 +863,12 @@
   document.getElementById("summaryCollapseBtn").addEventListener("click", collapseSummary);
 
   document.getElementById("downloadSummaryBtn").addEventListener("click", () => {
-    const text = document.getElementById("summaryText").textContent;
-    if (!text) return;
-    const blob = new Blob([text], { type: "text/plain" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `cpl-summary-${sessionId ? sessionId.slice(0, 8) : "export"}.txt`;
+    if (!sessionId) return;
+    // Trigger a ZIP download from the server — includes summary + all uploaded documents
+    const a = document.createElement("a");
+    a.href = `/api/session/${encodeURIComponent(sessionId)}/download`;
+    a.download = `cpl-package-${sessionId.slice(0, 8)}.zip`;
     a.click();
-    URL.revokeObjectURL(url);
   });
 
   // ─────────────────────────────────────────────

@@ -26,6 +26,29 @@ def ensure_storage_ready():
         os.makedirs(LOCAL_UPLOADS_DIR, exist_ok=True)
 
 
+def download_file(blob_url):
+    """
+    Downloads and returns the raw bytes for a previously-uploaded file.
+
+    Azure mode  → fetches from Blob Storage using the stored blob URL.
+    Local mode  → reads from the local filesystem (blob_url starts with local://).
+    """
+    if blob_url.startswith("local://"):
+        local_path = blob_url[len("local://"):]
+        with open(local_path, "rb") as fh:
+            return fh.read()
+
+    # Azure Blob Storage
+    from azure.storage.blob import BlobServiceClient
+    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    blob_service = BlobServiceClient.from_connection_string(conn_str)
+    container = blob_service.get_container_client(BLOB_CONTAINER)
+    # Blob URL format: https://<account>.blob.core.windows.net/<container>/<blob_name>
+    blob_name = blob_url.split(f"/{BLOB_CONTAINER}/", 1)[-1]
+    blob_client = container.get_blob_client(blob_name)
+    return blob_client.download_blob().readall()
+
+
 def upload_file(file_bytes, filename, upload_id):
     """
     Stores file_bytes and returns a URL string.

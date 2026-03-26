@@ -1515,7 +1515,49 @@ def api_chat():
         # the user hasn't confirmed they're done yet.
         if not user_message.lower().startswith("i just uploaded"):
             if should_advance(current_stage, user_message, answer, session_id=session_id):
-                current_stage = advance_stage(session_id, current_stage)
+                new_stage = advance_stage(session_id, current_stage)
+                if new_stage != current_stage:
+                    # The stage advanced — regenerate the response using the NEW stage's
+                    # prompt so the bot's first message in the new stage is correct.
+                    # (The old answer from the previous stage's prompt is discarded.)
+                    app.logger.info(
+                        "Stage advanced %s → %s; regenerating response for new stage",
+                        current_stage, new_stage,
+                    )
+                    current_stage = new_stage
+                    new_system_prompt = get_system_prompt(
+                        current_stage, collected_data=collected, document_context=doc_context or None
+                    )
+                    # Include the user message + old bot answer in history so the LLM
+                    # has context that the previous topic wrapped up.
+                    transition_messages = [
+                        {"role": "system", "content": new_system_prompt},
+                        *history,
+                        {"role": "user",      "content": user_message},
+                        {"role": "assistant", "content": answer},
+                        {"role": "user",      "content": "(continue)"},
+                    ]
+                    transition_response = client.chat.completions.create(
+                        model=deployment,
+                        messages=transition_messages,
+                        temperature=0.3,
+                    )
+                    answer = (transition_response.choices[0].message.content or "").strip()
+                    # Replace the stale assistant message in the DB with the correct one
+                    try:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE TOP (1) messages SET content = ? "
+                            "WHERE session_id = ? AND role = 'assistant' "
+                            "AND timestamp = (SELECT MAX(timestamp) FROM messages "
+                            "WHERE session_id = ? AND role = 'assistant')",
+                            (answer, session_id, session_id),
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        app.logger.exception("Failed to update assistant message after stage transition")
 
         return jsonify({"answer": answer, "stage": current_stage})
 

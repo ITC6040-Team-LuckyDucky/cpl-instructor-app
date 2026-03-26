@@ -788,8 +788,11 @@
     }
   }
 
-  // Core chat API call — accepts an explicit message string
-  async function sendChatMessage(msg) {
+  // Core chat API call — accepts an explicit message string.
+  // Pass isUploadMessage=true when the message is the auto-sent "I just uploaded …"
+  // acknowledgement — in that case we skip updating the stage UI so an upload can
+  // never visually jump the stage forward before the user confirms they're done.
+  async function sendChatMessage(msg, { isUploadMessage = false } = {}) {
     if (!sessionId) {
       appendMessage("bot", "No active session — please wait or click + New Session.");
       return;
@@ -814,7 +817,12 @@
         appendMessage("bot", "Error: " + (data.error || "Request failed"));
       } else {
         appendMessage("bot", data.answer || "");
-        updateStageUI(data.stage || "welcome");
+
+        // Never let an auto-upload message move the stage forward in the UI —
+        // the server guarantees the same, but this is a belt-and-suspenders guard.
+        if (!isUploadMessage) {
+          updateStageUI(data.stage || "welcome");
+        }
 
         // Auto-regenerate the summary if we're in the summary stage and the
         // user sent a substantive message (not just "yes", "no", "ok", etc.)
@@ -1104,8 +1112,9 @@
       } else {
         clearSelectedFile();
         loadUploadedFiles();
-        // Auto-send a chat message so the bot acknowledges the upload
-        await sendChatMessage(`I just uploaded ${filename}.`);
+        // Auto-send a chat message so the bot acknowledges the upload.
+        // isUploadMessage=true prevents this from updating the stage UI.
+        await sendChatMessage(`I just uploaded ${filename}.`, { isUploadMessage: true });
         // If at the summary stage, auto-regenerate the summary after the bot responds
         if (currentStage === "summary") {
           const card    = document.getElementById("summaryCard");

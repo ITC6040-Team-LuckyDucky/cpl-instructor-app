@@ -454,18 +454,67 @@ def should_advance(current_stage, user_message, assistant_response, session_id=N
         return any(kw in msg for kw in reflection_keywords) or len(words) >= 15 or user_turns_in_stage(4)
 
     if current_stage == "evidence":
-        # Exact whole-message matches for clear "I'm done" signals
-        exact_done = {"no", "nope", "nah", "none"}
-        if msg in exact_done:
+        stripped = msg.strip()
+
+        # NEVER advance if user is saying they HAVE evidence (want to upload)
+        affirmatives = ["yes", "yeah", "yep", "yea", "sure", "y", "i do", "i have"]
+        if any(stripped == a or stripped.startswith(a + " ") for a in affirmatives):
+            app.logger.debug(
+                "[should_advance] evidence BLOCKED (affirmative): msg=%r", user_message
+            )
+            return False
+
+        # NEVER advance on auto-upload messages (already caught above, belt+suspenders)
+        if stripped.startswith("i just uploaded"):
+            return False
+
+        # Exact full-message match for short "done" responses
+        done_exact = {"no", "nope", "nah", "none", "done", "no thanks", "n"}
+        if stripped in done_exact:
+            app.logger.debug(
+                "[should_advance] evidence ADVANCE (exact): msg=%r", user_message
+            )
             return True
-        # Phrase matches — only advance on unambiguous completion phrases
-        evidence_phrases = [
+
+        # Phrase match for longer "I'm done" responses
+        done_phrases = [
             "no more", "that's all", "thats all", "that's it", "thats it",
-            "all done", "i'm good", "im good", "nothing else", "no evidence",
-            "no documents", "finished", "complete", "nothing to upload",
-            "done uploading",
+            "all done", "i'm good", "im good", "nothing else", "no documents",
+            "no evidence", "finished", "complete", "nothing to upload",
+            "done uploading", "no i don't", "don't have any",
         ]
-        return any(phrase in msg for phrase in evidence_phrases) or user_turns_in_stage(8)
+        if any(phrase in stripped for phrase in done_phrases):
+            app.logger.debug(
+                "[should_advance] evidence ADVANCE (phrase): msg=%r", user_message
+            )
+            return True
+
+        # Turn-count fallback — debug log the count even when not advancing
+        if not session_id:
+            return False
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT updated_at FROM interview_state WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            stage_started_at = row[0] if row else None
+            cursor.execute(
+                "SELECT COUNT(*) FROM messages "
+                "WHERE session_id = ? AND role = 'user' AND timestamp > ?",
+                (session_id, stage_started_at),
+            )
+            turn_count = cursor.fetchone()[0]
+            conn.close()
+            app.logger.debug(
+                "[should_advance] evidence turn_count=%d stage_started_at=%s msg=%r",
+                turn_count, stage_started_at, user_message,
+            )
+            return turn_count >= 8
+        except Exception:
+            return False
 
     # "summary" is the final stage — never advance
     return False
@@ -1461,10 +1510,12 @@ def api_chat():
         # Extract structured fields from this exchange (separate LLM call, best-effort)
         extract_fields(session_id, current_stage, user_message, answer)
 
-        # Check whether the app should advance to the next interview stage
-        # (current_stage was already fetched above before the OpenAI call)
-        if should_advance(current_stage, user_message, answer, session_id=session_id):
-            current_stage = advance_stage(session_id, current_stage)
+        # Check whether the app should advance to the next interview stage.
+        # Auto-upload messages ("I just uploaded …") must never trigger an advance —
+        # the user hasn't confirmed they're done yet.
+        if not user_message.lower().startswith("i just uploaded"):
+            if should_advance(current_stage, user_message, answer, session_id=session_id):
+                current_stage = advance_stage(session_id, current_stage)
 
         return jsonify({"answer": answer, "stage": current_stage})
 

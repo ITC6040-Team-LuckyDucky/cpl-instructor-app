@@ -776,6 +776,7 @@
         bodyEl.classList.remove("expanded");
         toggleBtn.textContent = "Show Full Summary";
         card.style.display = "block";
+        summaryVersion++;   // increment ONLY here, after confirmed new summary received
         updateSummaryMeta();
         pulseSummaryCard();
         showSummaryToast();
@@ -864,7 +865,8 @@
   }
 
   function updateSummaryMeta() {
-    summaryVersion++;
+    // NOTE: summaryVersion must be incremented by the caller AFTER a confirmed
+    // successful API response — never increment it here.
     const metaEl     = document.getElementById("summaryMeta");
     const badgeEl    = document.getElementById("summaryVersionBadge");
     const tsEl       = document.getElementById("summaryTimestamp");
@@ -924,6 +926,7 @@
       bodyEl.classList.remove("expanded");
       toggleBtn.textContent = "Show Full Summary";
       card.style.display = "block";
+      summaryVersion++;   // increment ONLY here, after confirmed new summary received
       updateSummaryMeta();
       pulseSummaryCard();
       showSummaryToast();
@@ -1116,6 +1119,7 @@
               bodyEl.classList.remove("expanded");
               toggleBtn.textContent = "Show Full Summary";
               card.style.display = "block";
+              summaryVersion++;   // increment ONLY here, after confirmed new summary received
               updateSummaryMeta();
               pulseSummaryCard();
               showSummaryToast();
